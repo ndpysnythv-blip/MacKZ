@@ -16,6 +16,8 @@ final class OverlayController {
 
     /// Metal 设备；为 nil 表示本机不支持 Metal（此时渲染层整体降级为不可用）
     private let device: MTLDevice?
+    /// 渲染层不可用时的原因（供菜单栏显示，避免用户只看到「没反应」）
+    var unavailableReason: String? { device == nil ? "本机不支持 Metal，渲染层已禁用" : nil }
     private var windows: [OverlayWindow] = []
     private var config: Config
     private var stream: ScreenCaptureStream?

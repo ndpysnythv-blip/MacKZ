@@ -34,6 +34,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let controller = OverlayController(config: self.config)
             controller.onStatus = { [weak self] message in self?.status?.setRenderStatus(message) }
             self.overlay = controller
+            if let reason = controller.unavailableReason { self.status?.setRenderStatus(reason) }
             NSLog("[MacKZ] 渲染层已就绪")
         }
 

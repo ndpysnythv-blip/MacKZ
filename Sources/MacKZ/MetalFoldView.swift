@@ -78,6 +78,8 @@ final class MetalFoldView: NSView {
     private var fallbackTexture: MTLTexture?
     private var displayLink: CADisplayLink?
     private var needsFrame = true
+    /// 着色器失败只上报一次，避免刷屏
+    private var didReportPipelineFailure = false
 
     private var metalLayer: CAMetalLayer? { layer as? CAMetalLayer }
 
@@ -198,8 +200,17 @@ final class MetalFoldView: NSView {
     }
 
     private func draw() {
-        guard let metalLayer, pipelines.count == 4,
-              let drawable = metalLayer.nextDrawable() else { return }
+        // 管线为空说明着色器编译失败：明确上报一次原因，避免表现为「点了没反应/黑屏」
+        guard pipelines.count == 4 else {
+            if !didReportPipelineFailure {
+                didReportPipelineFailure = true
+                let message = "着色器未就绪（管线数 \(pipelines.count)/4），折叠动画无法渲染"
+                DispatchQueue.main.async { [weak self] in self?.onError?(message) }
+                NSLog("[MacKZ] %@", message)
+            }
+            return
+        }
+        guard let metalLayer, let drawable = metalLayer.nextDrawable() else { return }
 
         let p = min(max(progress, 0), 1)
 
