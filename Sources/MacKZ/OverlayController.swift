@@ -138,7 +138,12 @@ final class OverlayController {
         windows = []
         visible = false
         guard let device else { return }           // 无 Metal：不建窗口，其余功能照常
-        windows = NSScreen.screens.map { OverlayWindow(screen: $0, device: device, config: config) }
+        windows = NSScreen.screens.map { screen -> OverlayWindow in
+            let window = OverlayWindow(screen: screen, device: device, config: config)
+            // 把渲染层内部错误（如 Metal 着色器编译失败）透传到菜单栏，避免静默失效
+            window.foldView.onError = { [weak self] message in self?.onStatus?(message) }
+            return window
+        }
     }
 }
 

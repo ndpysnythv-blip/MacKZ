@@ -50,6 +50,8 @@ final class MetalFoldView: NSView {
     private var foldPipeline: MTLRenderPipelineState?
     private var blurPipeline: MTLRenderPipelineState?
     private var blurTexture: MTLTexture?
+    /// 无画面源时的兜底纹理（暗场渐变）：确保没有「屏幕录制」权限时也能看到折叠几何
+    private var fallbackTexture: MTLTexture?
     private var displayLink: CADisplayLink?
     private var needsFrame = true
     private var lastFailure: String?
@@ -165,8 +167,26 @@ final class MetalFoldView: NSView {
 
     // MARK: - 绘制
 
+    /// 生成兜底暗场纹理（2×2 渐变，由 GPU 放大）：无屏幕画面时填充覆盖层
+    private func makeFallbackTexture() -> MTLTexture? {
+        let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm,
+                                                                 width: 2, height: 2, mipmapped: false)
+        descriptor.usage = [.shaderRead]
+        guard let texture = device.makeTexture(descriptor: descriptor) else { return nil }
+        // BGRA 低位深蓝紫，与 Duo Continuity 的暗场基调一致
+        let pixels: [UInt32] = [0xFF2A1408, 0xFF3E2412,
+                                0xFF2A1408, 0xFF3E2412]
+        texture.replace(region: MTLRegionMake2D(0, 0, 2, 2), mipmapLevel: 0,
+                        withBytes: pixels, bytesPerRow: 2 * MemoryLayout<UInt32>.size)
+        return texture
+    }
+
     private func draw() {
-        guard let metalLayer, let foldPipeline, let blurPipeline, let source = sourceTexture,
+        // 没有屏幕画面（未授权 / 采集尚未出帧）时退回兜底暗场，
+        // 这样即使拿不到权限，折叠动画的形状依然可见，便于判断程序是否在工作。
+        if sourceTexture == nil, fallbackTexture == nil { fallbackTexture = makeFallbackTexture() }
+        guard let metalLayer, let foldPipeline, let blurPipeline,
+              let source = sourceTexture ?? fallbackTexture,
               let drawable = metalLayer.nextDrawable() else { return }
         let w = Int(metalLayer.drawableSize.width), h = Int(metalLayer.drawableSize.height)
         guard w > 1, h > 1 else { return }
