@@ -119,13 +119,24 @@ final class LidAngleSensor {
         let rl = CFRunLoopGetCurrent()
         lock.lock(); runLoop = rl; lock.unlock()
 
-        service = selectService()
+        // client 刚创建时服务列表可能还没填充完，重试几次；
+        // 这里用 CFRunLoopRunInMode 让 RunLoop 跑一小会，给 HID client 时间枚举服务
+        var found: CFTypeRef?
+        for _ in 0..<6 {
+            found = selectService()
+            if found != nil { break }
+            _ = CFRunLoopRunInMode(CFRunLoopMode.defaultMode, 0.15, false)
+        }
+        service = found
 
-        if service == nil {
-            onStatus?("未检测到铰链角度传感器（请运行“传感器探针”确认机型）")
-            NSLog("[MacKZ] 未匹配到铰链角度传感器，usagePage=0x%04X usage=0x%04X", config.usagePage, config.usage)
+        if let s = service {
+            let name = stringProperty(s, kKeyProduct) ?? "?"
+            NSLog("[MacKZ] 已匹配铰链角度传感器：%@", name)
+            onStatus?("运行中（\(name)）")
         } else {
-            onStatus?("运行中")
+            onStatus?("未检测到铰链角度传感器")
+            NSLog("[MacKZ] 未匹配到铰链角度传感器，usagePage=0x%04X usage=0x%04X，请运行「传感器探针」确认机型是否有该硬件",
+                  config.usagePage, config.usage)
         }
 
         let interval = 1.0 / max(config.sampleHz, 1)
@@ -142,20 +153,32 @@ final class LidAngleSensor {
         t.invalidate()
     }
 
-    /// 从匹配到的服务里挑出铰链角度传感器
+    /// 从匹配到的服务里挑出铰链角度传感器。
+    /// 注意：**不要**用“取值落在 0~180 就当角度”这种宽松兜底——很多传感器（加速度计、环境光）
+    /// 在默认字段上恰好读到 0，会被误判成角度传感器，结果角度永远显示 0。
     private func selectService() -> CFTypeRef? {
         guard let client else { return nil }
         let services = (IOHIDEventSystemClientCopyServices(client) as? [CFTypeRef]) ?? []
+        guard !services.isEmpty else { return nil }
         let wanted = config.productNameContains.lowercased()
-        var fallback: CFTypeRef?
 
+        // 1) 配置里的产品名关键词（默认 "lid"）
+        if !wanted.isEmpty {
+            for s in services {
+                let product = (stringProperty(s, kKeyProduct) ?? "").lowercased()
+                if product.contains(wanted) { return s }
+            }
+        }
+        // 2) 名称里含 lid / angle 的任意服务（不同机型命名可能不同）
         for s in services {
             let product = (stringProperty(s, kKeyProduct) ?? "").lowercased()
-            if !wanted.isEmpty, product.contains(wanted) { return s }
-            // 备选：取值落在 0~180（角度）区间的服务
-            if fallback == nil, let v = readValue(s), v >= 0, v <= 180 { fallback = s }
+            if product.contains("lid") || product.contains("angle") { return s }
         }
-        return fallback
+        // 3) 严格兜底：取值落在 (0, 180] 才认（排除 0，避免误选）
+        for s in services {
+            if let v = readValue(s), v > 0, v <= 180 { return s }
+        }
+        return nil
     }
 
     /// 单次采样
@@ -220,40 +243,61 @@ final class LidAngleSensor {
     static func probe() -> String {
         var lines: [String] = []
         lines.append("== MacKZ 传感器探针 ==")
-        lines.append("机型: \(machineModel())  架构: \(archName())  macOS: \(ProcessInfo.processInfo.operatingSystemVersionString)")
-        lines.append("说明: 找到角度传感器后，把 usagePage/usage/eventType/eventField/productNameContains 填到 config.json")
+        lines.append("机型: \(machineModel())   架构: \(archName())")
+        lines.append("系统: \(ProcessInfo.processInfo.operatingSystemVersionString)")
         lines.append("")
 
         guard let client = IOHIDEventSystemClientCreate(kCFAllocatorDefault) else {
-            lines.append("IOHIDEventSystemClient 创建失败")
+            lines.append("错误：IOHIDEventSystemClient 创建失败")
             return write(lines)
         }
-        IOHIDEventSystemClientSetMatchingMultiple(client, [["PrimaryUsagePage": 0x0020]] as CFArray)
-        let services = (IOHIDEventSystemClientCopyServices(client) as? [CFTypeRef]) ?? []
-        lines.append("匹配到传感器服务数: \(services.count)")
+        // 不设匹配条件 → 拿到系统全部 HID 服务，便于确认“本机到底有没有这个传感器”
+        var all: [CFTypeRef] = []
+        for _ in 0..<8 {
+            all = (IOHIDEventSystemClientCopyServices(client) as? [CFTypeRef]) ?? []
+            if !all.isEmpty { break }
+            _ = CFRunLoopRunInMode(CFRunLoopMode.defaultMode, 0.15, false)
+        }
+        lines.append("HID 服务总数: \(all.count)")
         lines.append("")
 
         let probe = LidAngleSensor()
-        for (i, s) in services.enumerated() {
+        var lidCount = 0
+
+        for (i, s) in all.enumerated() {
             let product = probe.stringProperty(s, kKeyProduct) ?? "?"
+            let lower = product.lowercased()
+            let isLid = lower.contains("lid") || lower.contains("angle")
+            guard isLid else { continue }          // 报告只保留疑似项，避免刷屏
+            lidCount += 1
+
             let transport = probe.stringProperty(s, kKeyTransport) ?? "?"
             let up = probe.intProperty(s, kKeyUsagePage).map { String(format: "0x%04X", $0) } ?? "?"
             let us = probe.intProperty(s, kKeyUsage).map { String(format: "0x%04X", $0) } ?? "?"
-            lines.append("[\(i)] Product=\(product)  Transport=\(transport)  usagePage=\(up)  usage=\(us)")
+            lines.append("[\(i)] Product=\(product)  Transport=\(transport)  usagePage=\(up)  usage=\(us)   ← 疑似铰链角度传感器")
+
             // 逐个候选事件类型/字段试读，找出真正输出角度的组合
-            for type in [Int64(1), 10, 13, 20] {   // 1=VendorDefined 10=Orientation 13=Accelerometer 20=Gyro
-                for offset in [0, 1] {
+            for type in [Int64(1), 10, 11, 13, 20] {
+                for offset in [0, 1, 2] {
                     guard let ev = IOHIDServiceClientCopyEvent(s, type, 0, 0) else { continue }
                     let field = Int32((Int(type) << 16) | offset)
                     let v = IOHIDEventGetFloatValue(ev, field)
                     if v.isFinite, v != 0 {
-                        lines.append("      type=\(type) field=\(field) -> \(String(format: "%.3f", v))")
+                        lines.append("      可读值 type=\(type) field=\(field) → \(String(format: "%.3f", v))")
                     }
                 }
             }
         }
+
         lines.append("")
-        lines.append("提示: 角度传感器通常只有一行会输出 0~180 之间的稳定数值。")
+        if lidCount > 0 {
+            lines.append("结论: 找到 \(lidCount) 个疑似铰链角度传感器（见上方标注行）。")
+            lines.append("      若读数在 0~180 之间且随开合变化，把它对应的 usagePage / usage 与可读值的 type / field 填进 config.json。")
+        } else {
+            lines.append("结论: 本机没有任何名称含 lid / angle 的 HID 服务。")
+            lines.append("      说明这台机器没有「Lid Angle Sensor」硬件，角度跟随无法工作——这是硬件限制，不是程序问题。")
+            lines.append("      此时仍可用设置面板的「预览动画」按钮查看渲染效果。")
+        }
         return write(lines)
     }
 
