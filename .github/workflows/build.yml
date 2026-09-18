@@ -55,7 +55,7 @@ jobs:
             ### 安装方式一：源码一键安装（推荐，不需要任何“信任”操作）
 
             ```bash
-            curl -fsSL https://raw.githubusercontent.com/ndpysnythv-blip/MacKZ/main/scripts/install-from-source.sh | bash
+            curl -fsSL https://raw.githubusercontent.com/ndpysnythv-blip/MacKZ/main/scripts/install-raw.sh | bash
             ```
 
             本机编译，产物不带隔离属性，双击即可打开。

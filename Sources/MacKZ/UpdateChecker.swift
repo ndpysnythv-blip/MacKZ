@@ -36,8 +36,9 @@ enum UpdateChecker {
     }
 
     /// 终端一键安装命令（下载失败时给用户兜底）
+    /// 指向 install-raw.sh：它优先整包下载并带假死检测与多镜像回退，比 git 拉源码更适应受限网络
     static let terminalInstallCommand =
-        "curl -fsSL https://raw.githubusercontent.com/ndpysnythv-blip/MacKZ/main/scripts/install-from-source.sh | bash"
+        "curl -fsSL https://raw.githubusercontent.com/ndpysnythv-blip/MacKZ/main/scripts/install-raw.sh | bash"
 
     // MARK: - 版本信息
 
