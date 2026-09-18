@@ -103,10 +103,13 @@ enum RemoteTLS {
         let status = SecPKCS12Import(data as CFData, options, &items)
         guard status == errSecSuccess,
               let list = items as? [[String: Any]],
-              let identity = list.first?[kSecImportItemIdentity as String] as? SecIdentity else {
+              let entry = list.first?[kSecImportItemIdentity as String] else {
             NSLog("[MacKZ] 自签证书导入失败（OSStatus %d），手机遥控将回退到 HTTP", status)
             return nil
         }
+        // 注意：这里必须用强制转换。SecIdentity 是 CoreFoundation 类型，
+        // 写成 as? 会被编译器判为「条件转换永远成功」而直接编译失败。
+        let identity = entry as! SecIdentity
         return sec_identity_create(identity)
     }
 
