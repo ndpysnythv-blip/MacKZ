@@ -216,9 +216,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     点「打开「锁定屏幕」设置」，把「关闭显示器后需要密码」改成「永不」。
                     """
                     : "已恢复系统默认：合盖后正常休眠。")
-            case .failure(let message):
+            case .failure(let error):
                 self.notify("设置失败", """
-                \(message)
+                \(error.localizedDescription)
 
                 也可以手动打开「终端」执行下面这条命令（需要输入开机密码）：
 

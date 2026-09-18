@@ -17,6 +17,16 @@ import Foundation
 ///   「关闭显示器后需要密码」改为「永不」（本类只提供直达该设置面板的入口）。
 enum PowerControl {
 
+    /// 设置失败的原因（含用户取消授权）
+    enum PowerError: LocalizedError {
+        case failed(String)
+
+        var errorDescription: String? {
+            if case .failed(let message) = self { return message }
+            return nil
+        }
+    }
+
     /// 当前系统是否已开启「合盖不休眠」
     static var isSleepDisabled: Bool {
         guard let output = run("/usr/bin/pmset", ["-g"]) else { return false }
@@ -28,7 +38,7 @@ enum PowerControl {
     }
 
     /// 设置「合盖不休眠」（会弹出系统管理员授权框）
-    static func setSleepDisabled(_ disabled: Bool, completion: @escaping (Result<Void, String>) -> Void) {
+    static func setSleepDisabled(_ disabled: Bool, completion: @escaping (Result<Void, PowerError>) -> Void) {
         // do shell script ... with administrator privileges 会弹出标准系统密码框
         let script = "do shell script \"/usr/bin/pmset -a disablesleep \(disabled ? 1 : 0)\" with administrator privileges"
         let process = Process()
@@ -48,14 +58,14 @@ enum PowerControl {
                 } else {
                     // 用户点「取消」同样会走到这里（osascript 返回 -128）
                     let reason = message.isEmpty ? "命令执行失败（代码 \(finished.terminationStatus)）" : message
-                    completion(.failure(reason))
+                    completion(.failure(.failed(reason)))
                 }
             }
         }
         do {
             try process.run()
         } catch {
-            DispatchQueue.main.async { completion(.failure(error.localizedDescription)) }
+            DispatchQueue.main.async { completion(.failure(.failed(error.localizedDescription))) }
         }
     }
 
