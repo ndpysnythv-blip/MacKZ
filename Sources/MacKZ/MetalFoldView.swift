@@ -175,7 +175,10 @@ final class MetalFoldView: NSView {
         u.texelSize = SIMD2<Float>(1 / Float(source.width), 1 / Float(source.height))
         u.creaseRatio = Float(creaseRatio)
         // 折痕角：完整打开 = 0°；完全合上 = maxFoldDeg，钳制在 80° 内避免几何退化
-        u.foldAngle = Float(min((1 - max(min(fold, 1), 0)) * maxFoldDeg, 80) * .pi / 180)
+        // 拆成多步计算，避免单行复合表达式让类型检查超时（Swift 编译器已知问题）
+        let foldProgress = min(max(fold, 0), 1)
+        let foldDegrees = min((1 - foldProgress) * maxFoldDeg, 80)
+        u.foldAngle = Float(foldDegrees * Double.pi / 180)
         u.eyeDistance = Float(eyeDistance)
         u.blurStrength = Float(blurStrength)
         u.dispersion = Float(dispersion)

@@ -136,7 +136,7 @@ final class LidAngleSensor {
         CFRunLoopRun()   // 阻塞在传感器线程，直到 stop() 调用 CFRunLoopStop
 
         // 线程收尾
-        IOHIDEventSystemClientUnscheduleFromRunLoop(client, rl, CFRunLoopMode.defaultMode.rawValue)
+        IOHIDEventSystemClientUnscheduleFromRunLoop(client, rl ?? CFRunLoopGetCurrent(), CFRunLoopMode.defaultMode.rawValue)
         service = nil
         self.client = nil
         t.invalidate()

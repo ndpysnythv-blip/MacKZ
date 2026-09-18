@@ -213,17 +213,18 @@ final class HingeAnimationEngine {
         guard config.enabled else { return }
         cancelCatchUp()
         if demoLink != nil { return }
-        let link = CADisplayLink(target: self, selector: #selector(demoTick))
-        link.preferredFrameRateRange = CAFrameRateRange(minimum: 30, maximum: 120, preferred: 60)
-        link.add(to: .main, forMode: .common)
-        demoLink = link
+        // macOS 上 CADisplayLink 不能直接 init（那是 iOS 的 API），演示动画用 60Hz 定时器驱动即可
+        let timer = Timer(timeInterval: 1.0 / 60.0, target: self,
+                          selector: #selector(demoTick(_:)), userInfo: nil, repeats: true)
+        RunLoop.main.add(timer, forMode: .common)
+        demoLink = timer
         demoStart = CACurrentMediaTime()
         demoDuration = duration
         phase = .tracking
         sequenceTarget = 1
     }
 
-    @objc private func demoTick() {
+    @objc private func demoTick(_ timer: Timer) {
         let elapsed = CACurrentMediaTime() - demoStart
         let k = min(elapsed / demoDuration, 1)
         // 0 → 1 → 0：前半段掀开，后半段合上
@@ -241,7 +242,7 @@ final class HingeAnimationEngine {
         emit()
     }
 
-    private var demoLink: CADisplayLink?
+    private var demoLink: Timer?
     private var demoStart: CFTimeInterval = 0
     private var demoDuration: Double = 2.6
 
