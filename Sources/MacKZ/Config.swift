@@ -62,6 +62,8 @@ struct Config: Codable {
     var eyeDistance = 2.2
     /// 是否显示进度角标
     var showBadge = true
+    /// 启动后自动检查更新（发现新版本才提示，平时完全静默）
+    var autoCheckUpdate = true
 
     // MARK: 传感器匹配（不同机型可能不同，用“传感器探针”确认）
     /// HID 传感器用途页，0x0020 = Sensors

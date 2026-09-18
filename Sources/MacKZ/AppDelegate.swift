@@ -73,6 +73,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // 启动自检：主动申请「屏幕录制」权限（拿到桌面画面才能做 Duo Continuity 重投影）
         ensureCapturePermission()
+
+        // 启动后延迟自动检查更新（可在设置面板关闭）；更新包同样来自 GitHub Releases
+        if config.autoCheckUpdate {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [weak self] in
+                self?.checkUpdate(silent: true)
+            }
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -154,15 +161,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - 更新
 
-    /// 检查 GitHub Release 是否有新版本
-    private func checkUpdate() {
+    /// 检查 GitHub Release 是否有新版本；silent = true 时只在发现新版本才提示（供启动自检用）
+    private func checkUpdate(silent: Bool = false) {
         UpdateChecker.check { [weak self] result in
             guard let self else { return }
             switch result {
             case .failure(let error):
-                self.notify("检查更新失败", error.localizedDescription)
+                if !silent { self.notify("检查更新失败", error.localizedDescription) }
             case .success(.none):
-                self.notify("已是最新版本", "当前版本 \(UpdateChecker.currentVersion)。")
+                if !silent { self.notify("已是最新版本", "当前版本 \(UpdateChecker.currentVersion)。") }
             case .success(.some(let release)):
                 self.promptUpdate(release)
             }

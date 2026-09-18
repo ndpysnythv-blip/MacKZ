@@ -174,6 +174,11 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             switchRow("禁止被录屏/共享捕获", \.excludedFromCapture)
         ]))
 
+        // ---------- 更新 ----------
+        stack.addArrangedSubview(sectionBox(title: "更新（来自 GitHub Releases）", rows: [
+            switchRow("启动时自动检查更新", \.autoCheckUpdate)
+        ]))
+
         // ---------- 操作按钮 ----------
         let resetButton = makeButton("恢复默认", #selector(resetDefaults))
         let reloadButton = makeButton("放弃修改并重载", #selector(reloadFromDisk))
