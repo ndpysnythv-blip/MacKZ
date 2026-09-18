@@ -8,12 +8,15 @@
 #   curl -fsSL https://raw.githubusercontent.com/ndpysnythv-blip/MacKZ/main/scripts/install-from-source.sh | bash
 set -euo pipefail
 
-REPO="https://github.com/ndpysnythv-blip/MacKZ.git"
+REPO_HTTPS="https://github.com/ndpysnythv-blip/MacKZ.git"
+REPO_SSH="git@github.com:ndpysnythv-blip/MacKZ.git"
 APP_NAME="MacKZ"
 BUNDLE_ID="com.mackz.plugin"
 APP_DST="/Applications/${APP_NAME}.app"
 WORK_ROOT="$(mktemp -d)"
 WORK="${WORK_ROOT}/${APP_NAME}"
+# 用户之前手动 clone 过的仓库，优先复用（省一次下载）
+LOCAL_SRC="${HOME}/${APP_NAME}"
 
 # 变量一律用 ${} 包裹：macOS 自带 bash 3.2 会把变量名后的中文字节吞进变量名
 cleanup() { rm -rf "${WORK_ROOT}"; }
@@ -34,17 +37,61 @@ if ! command -v swiftc >/dev/null 2>&1; then
 fi
 echo "    swiftc: $(swiftc --version 2>/dev/null | head -n 1)"
 
-echo "==> 拉取源码"
-git clone --depth 1 "${REPO}" "${WORK}" >/dev/null 2>&1 || {
-  echo "错误：拉取源码失败，请检查网络后重试。" >&2
-  exit 1
+echo "==> 获取源码"
+SRC_DIR=""
+GIT_LOG="${WORK_ROOT}/git-error.log"
+
+# 低速保护：连续 20 秒低于 1KB/s 就中断，避免卡在“假死”状态
+GIT_OPTS=(-c http.lowSpeedLimit=1000 -c http.lowSpeedTime=20)
+
+try_pull_local() {
+  [ -d "${LOCAL_SRC}/.git" ] || return 1
+  echo "    发现本地源码 ${LOCAL_SRC}，尝试更新…"
+  if git -C "${LOCAL_SRC}" "${GIT_OPTS[@]}" pull --ff-only >"${GIT_LOG}" 2>&1; then
+    echo "    已更新到最新版本"
+    SRC_DIR="${LOCAL_SRC}"
+    return 0
+  fi
+  echo "    更新失败，稍后改用重新下载"
+  return 1
 }
 
+try_clone() {
+  local url="$1"
+  rm -rf "${WORK}"
+  git "${GIT_OPTS[@]}" clone --depth 1 "${url}" "${WORK}" >"${GIT_LOG}" 2>&1
+}
+
+try_pull_local || true
+
+if [ -z "${SRC_DIR}" ]; then
+  echo "    正在下载源码…"
+  if try_clone "${REPO_HTTPS}"; then
+    SRC_DIR="${WORK}"
+  elif try_clone "${REPO_SSH}"; then          # 配过 SSH key 的话走这条路
+    SRC_DIR="${WORK}"
+  else
+    echo "" >&2
+    echo "错误：无法获取源码（git 报错如下）" >&2
+    echo "----------------------------------------" >&2
+    cat "${GIT_LOG}" >&2
+    echo "----------------------------------------" >&2
+    echo "" >&2
+    echo "常见原因与解决办法：" >&2
+    echo "  1) 网络访问 GitHub 不通 —— 设置代理后重试（端口换成你自己的）：" >&2
+    echo "       export https_proxy=http://127.0.0.1:7890 http_proxy=http://127.0.0.1:7890" >&2
+    echo "  2) 已有本地仓库但更新失败 —— 可先删掉再重试：" >&2
+    echo "       rm -rf ${LOCAL_SRC}" >&2
+    echo "  3) 怀疑 DNS 被污染 —— 换网络或开启系统全局代理后重试。" >&2
+    exit 1
+  fi
+fi
+
 echo "==> 编译（约需十几秒）"
-cd "${WORK}"
+cd "${SRC_DIR}"
 bash ./build.sh
 
-SRC="${WORK}/build/${APP_NAME}.app"
+SRC="${SRC_DIR}/build/${APP_NAME}.app"
 if [ ! -d "${SRC}" ]; then
   echo "错误：编译产物缺失，请把上面的报错反馈给作者。" >&2
   exit 1
