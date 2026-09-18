@@ -167,17 +167,29 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         remoteLabel = remoteState
         let remoteTip = NSTextField(wrappingLabelWithString:
             "手机与 Mac 连同一个 Wi-Fi，用手机浏览器打开上面的地址，即可远程控制折叠动画（合上 / 打开 / 播放一次 / 拖动进度），适合演示给别人看。\n"
-            + "地址中的 t=xxxx 是本次随机生成的访问口令，只在局域网内有效，重启插件后会重新生成。")
+            + "地址中的 t=xxxx 是本次随机生成的访问口令，只在局域网内有效，重启插件后会重新生成。\n"
+            + "地址是 https:// 开头（本机自签证书）：手机首次打开会提示「证书不受信任」，点「显示详细信息 → 继续访问」即可。")
         remoteTip.font = .systemFont(ofSize: 11)
         remoteTip.textColor = .tertiaryLabelColor
         remoteTip.preferredMaxLayoutWidth = 520
+        // 陀螺仪用法说明：手机没有铰链传感器也能靠姿态角驱动折叠动画
+        let gyroTip = NSTextField(wrappingLabelWithString:
+            "陀螺仪铰链模式：把手机竖着贴（或用皮筋绑）在 MacBook 屏幕上，手机页面点「启用陀螺仪」，"
+            + "手机姿态角就会实时换算成屏幕开合角，替代本机铰链传感器驱动折叠动画 —— 适合没有 Lid Angle Sensor 的机型。\n"
+            + "首次使用请在合上屏幕时点一次「标定为完全合上」；手机锁屏或切到后台会自动交回本机传感器。"
+            + "读取运动传感器必须走 HTTPS，所以请用上面 https:// 的地址打开。")
+        gyroTip.font = .systemFont(ofSize: 11)
+        gyroTip.textColor = .tertiaryLabelColor
+        gyroTip.preferredMaxLayoutWidth = 520
         stack.addArrangedSubview(sectionBox(title: "手机遥控（演示用）", rows: [
             makeRow(views: [remoteState]),
             makeRow(views: [makeButton("复制链接", #selector(copyRemoteURL)),
                             makeButton("在本机打开", #selector(openRemoteURL)),
                             makeButton("刷新地址", #selector(refreshRemoteURL))]),
             switchRow("启用手机遥控", \.remoteControl),
-            remoteTip
+            switchRow("允许手机陀螺仪接管角度", \.phoneGyro),
+            remoteTip,
+            gyroTip
         ]))
 
         // ---------- 常用（只放新手真正会调的几项） ----------

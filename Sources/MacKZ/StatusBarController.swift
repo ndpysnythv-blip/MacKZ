@@ -92,6 +92,8 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         NSGraphicsContext.saveGraphicsState()
         NSGraphicsContext.current = context
         context.cgContext.interpolationQuality = .high
+        // 先清空画布：等比缩放会在两侧留下留白，留白必须是全透明，否则会被算成黑色
+        context.cgContext.clear(CGRect(x: 0, y: 0, width: pixels, height: pixels))
         context.cgContext.draw(cropped, in: aspectFitRect(for: cropped, in: pixels))   // 等比居中，不拉伸变形
         NSGraphicsContext.restoreGraphicsState()
 
@@ -173,7 +175,11 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         return LogoProbe(box: box, whiteRatio: Double(white) / Double(side * side))
     }
 
-    /// 把位图里的白底刷成透明：alpha = 255 − 亮度，RGB 统一涂黑（模板图只看 alpha）。
+    /// 把位图里的白底刷成透明：最终 alpha = 原有 alpha × (255 − 亮度) / 255，RGB 统一涂黑（模板图只看 alpha）。
+    ///
+    /// 关键点：必须乘上「原有 alpha」。logo 不是正方形时等比缩放会在两侧留下透明留白，
+    /// 这些像素亮度为 0，若直接用 255 − 亮度，就会被算成「不透明黑」，
+    /// 在菜单栏上表现为 logo 左右（或上下）各挂一条黑边 —— 这里显式跳过留白像素即可彻底消除。
     /// 用亮度差当 alpha，图形边缘会保留自然的半透明过渡，不会切出硬锯齿。
     private static func makeWhiteTransparent(in rep: NSBitmapImageRep) {
         guard let data = rep.bitmapData else { return }
@@ -181,12 +187,23 @@ final class StatusBarController: NSObject, NSMenuDelegate {
             let row = data + y * rep.bytesPerRow
             for x in 0..<rep.pixelsWide {
                 let pixel = row + x * 4
-                let luminance = (Int(pixel[0]) * 299 + Int(pixel[1]) * 587 + Int(pixel[2]) * 114) / 1000
-                let alpha = 255 - luminance
+                let sourceAlpha = Int(pixel[3])
+                // 未被 logo 覆盖的留白：保持全透明，绝不能变成黑色
+                guard sourceAlpha > 0 else {
+                    pixel[0] = 0; pixel[1] = 0; pixel[2] = 0
+                    continue
+                }
+                // 位图是「预乘 alpha」格式：先还原真实颜色再算亮度，避免边缘半透明像素被算暗
+                let r = sourceAlpha == 255 ? Int(pixel[0]) : min(255, Int(pixel[0]) * 255 / sourceAlpha)
+                let g = sourceAlpha == 255 ? Int(pixel[1]) : min(255, Int(pixel[1]) * 255 / sourceAlpha)
+                let b = sourceAlpha == 255 ? Int(pixel[2]) : min(255, Int(pixel[2]) * 255 / sourceAlpha)
+                let luminance = (r * 299 + g * 587 + b * 114) / 1000
+                var alpha = (255 - luminance) * sourceAlpha / 255
+                if alpha < 24 { alpha = 0 }   // 24 以下视为白底/JPEG 噪点，直接全透明
                 pixel[0] = 0
                 pixel[1] = 0
                 pixel[2] = 0
-                pixel[3] = alpha < 24 ? 0 : UInt8(alpha)   // 24 以下视为白底噪点，直接全透明
+                pixel[3] = UInt8(alpha)
             }
         }
     }

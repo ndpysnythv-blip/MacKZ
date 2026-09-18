@@ -64,6 +64,8 @@ struct Config: Codable {
     var remoteControl = true
     /// 手机遥控端口
     var remoteControlPort = 52800
+    /// 是否允许手机陀螺仪接管铰链角度（手机贴在屏幕上模拟铰链，适合没有 Lid Angle Sensor 的机型）
+    var phoneGyro = true
     /// 启动后自动检查更新（发现新版本才提示，平时完全静默）
     var autoCheckUpdate = true
 

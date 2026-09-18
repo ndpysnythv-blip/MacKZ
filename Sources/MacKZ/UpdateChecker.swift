@@ -325,6 +325,22 @@ private final class UpdateDownloader: NSObject, URLSessionDownloadDelegate {
     }
 }
 
+// MARK: - 顶层窗口层级
+
+/// 弹窗与更新进度窗统一使用的层级。
+/// 必须高于覆盖动画层（999）与设置面板（1200），否则会被自己的窗口压住 ——
+/// 用户反馈的「更新弹窗老是在下面」就是这个原因。3000 只是「足够高」的示意值，
+/// macOS 允许任意整数层级，层级比较优先于同层内窗口的前后顺序。
+let macKZTopWindowLevel = NSWindow.Level(rawValue: 3000)
+
+/// 把本应用激活到前台。
+/// 本应用是 LSUIElement（没有 Dock 图标），macOS 14 起 `activate(ignoringOtherApps:)` 已废弃且不再可靠，
+/// 因此再走一遍 NSRunningApplication，否则窗口虽然显示了却拿不到焦点、看起来像「弹在下面」。
+func macKZActivateSelf() {
+    NSApp.activate(ignoringOtherApps: true)
+    NSRunningApplication.current.activate(options: [.activateAllWindows, .activateIgnoringOtherApps])
+}
+
 // MARK: - 下载进度窗口
 
 /// 更新下载进度浮窗：显示进度条与实时状态，浮在所有窗口之上，可随时取消。
@@ -346,8 +362,9 @@ final class UpdateProgressWindow: NSObject {
         super.init()
         window.title = "MacKZ 更新"
         window.isReleasedWhenClosed = false
-        window.level = NSWindow.Level(rawValue: 2000)      // 与弹窗同级：高于设置面板(1200)与覆盖动画层(999)
-        window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        window.level = macKZTopWindowLevel              // 高于设置面板(1200)与覆盖动画层(999)
+        window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+        window.hidesOnDeactivate = false
         window.center()
 
         titleLabel.font = .boldSystemFont(ofSize: 13)
@@ -391,8 +408,9 @@ final class UpdateProgressWindow: NSObject {
     func show(version: String) {
         titleLabel.stringValue = "正在下载 MacKZ \(version)"
         detailLabel.stringValue = "准备中…"
-        window.level = NSWindow.Level(rawValue: 2000)
-        NSApp.activate(ignoringOtherApps: true)
+        window.level = macKZTopWindowLevel
+        macKZActivateSelf()
+        window.makeKeyAndOrderFront(nil)
         window.orderFrontRegardless()
     }
 

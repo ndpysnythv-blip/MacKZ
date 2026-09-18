@@ -1,15 +1,18 @@
 import Darwin
 import Foundation
 import Network
+import Security
 
 /// 手机遥控（演示用）。
 ///
-/// 在 Mac 上开一个只监听局域网端口的极简 HTTP 服务：
-/// - `GET /`          返回手机控制页面（大按钮 + 进度滑块）
+/// 在 Mac 上开一个只监听局域网端口的极简 HTTP(S) 服务：
+/// - `GET /`          返回手机控制页面（大按钮 + 进度滑块 + 陀螺仪铰链模式）
 /// - `GET /cmd?t=口令&action=close|open|play|progress&v=0.5` 触发动画
+/// - `GET /hinge?t=口令&v=93.4` 上报手机陀螺仪换算出的铰链角度
 ///
 /// 设计取舍：
 /// - 只用系统自带的 Network.framework，不引入任何第三方依赖；
+/// - 优先用自签证书起 HTTPS（手机陀螺仪必须安全上下文），失败自动回退 HTTP；
 /// - 每次启动生成一个随机口令（地址里的 t=xxxx），避免同网段其它设备误触；
 /// - 只监听、不联网上报，不写任何文件，关闭开关即完全停止。
 final class RemoteControl {
@@ -24,6 +27,8 @@ final class RemoteControl {
 
     /// 收到指令（主线程回调）
     var onCommand: ((Command) -> Void)?
+    /// 收到手机陀螺仪换算出的铰链角度（度，主线程回调）
+    var onHinge: ((Double) -> Void)?
     /// 运行状态文本（主线程回调，用于设置面板显示）
     var onStatus: ((String) -> Void)?
 
@@ -33,11 +38,13 @@ final class RemoteControl {
     private var token = ""
 
     var isRunning: Bool { listener != nil }
+    /// 是否以 HTTPS 起监听（决定手机上应该打开哪个地址）
+    private(set) var isSecure = false
 
     /// 手机应访问的完整地址；未启动或取不到局域网 IP 时返回空串
     var accessURL: String {
         guard isRunning, !token.isEmpty, let ip = Self.localIPAddress() else { return "" }
-        return "http://\(ip):\(port)/?t=\(token)"
+        return "\(isSecure ? "https" : "http")://\(ip):\(port)/?t=\(token)"
     }
 
     // MARK: - 启停
@@ -53,7 +60,18 @@ final class RemoteControl {
             return
         }
         do {
-            let parameters = NWParameters.tcp
+            // 手机陀螺仪需要安全上下文：能拿到自签证书就用 HTTPS，否则退回 HTTP（遥控按钮仍可用）
+            let parameters: NWParameters
+            if let host = Self.localIPAddress(), let identity = RemoteTLS.identity(for: host) {
+                let tls = NWProtocolTLS.Options()
+                sec_protocol_options_set_local_identity(tls.securityProtocolOptions, identity)
+                sec_protocol_options_set_min_tls_protocol_version(tls.securityProtocolOptions, .TLSv12)
+                parameters = NWParameters(tls: tls, tcp: NWProtocolTCP.Options())
+                isSecure = true
+            } else {
+                parameters = NWParameters.tcp
+                isSecure = false
+            }
             parameters.allowLocalEndpointReuse = true
             let listener = try NWListener(using: parameters, on: nwPort)
             listener.newConnectionHandler = { [weak self] connection in self?.handle(connection) }
@@ -81,6 +99,7 @@ final class RemoteControl {
         listener?.cancel()
         listener = nil
         token = ""
+        isSecure = false
     }
 
     // MARK: - HTTP
@@ -121,20 +140,32 @@ final class RemoteControl {
         } else if route == "/cmd" {
             contentType = "text/plain; charset=utf-8"
             body = command(from: query)
+        } else if route == "/hinge" {
+            contentType = "text/plain; charset=utf-8"
+            body = hinge(from: query)
         } else {
             contentType = "text/plain; charset=utf-8"
             body = "not found"
         }
 
+        // 陀螺仪模式会以 20Hz 连续上报，若每条请求都重开连接（TLS 还要重新握手）开销过大，
+        // 因此默认复用连接；客户端明确要求 close 时才断开。
+        let keepAlive = !request.lowercased().contains("connection: close")
         let payload = Data(body.utf8)
         let header = "HTTP/1.1 200 OK\r\n"
             + "Content-Type: \(contentType)\r\n"
             + "Content-Length: \(payload.count)\r\n"
-            + "Connection: close\r\n"
+            + "Connection: \(keepAlive ? "keep-alive" : "close")\r\n"
             + "Cache-Control: no-store\r\n\r\n"
         var out = Data(header.utf8)
         out.append(payload)
-        connection.send(content: out, completion: .contentProcessed { _ in connection.cancel() })
+        connection.send(content: out, completion: .contentProcessed { [weak self] error in
+            guard let self, keepAlive, error == nil else {
+                connection.cancel()
+                return
+            }
+            self.receive(connection, buffer: Data())   // 同一条连接上继续等下一个请求
+        })
     }
 
     /// 解析并派发指令
@@ -153,6 +184,16 @@ final class RemoteControl {
         default:
             return "unknown action"
         }
+        return "ok"
+    }
+
+    /// 手机陀螺仪上报：/hinge?t=口令&v=93.4（v = 换算后的铰链角度，0 = 完全合上）
+    private func hinge(from query: String) -> String {
+        let params = Self.parseQuery(query)
+        guard !token.isEmpty, params["t"] == token else { return "unauthorized" }
+        guard let value = Double(params["v"] ?? ""), value.isFinite else { return "bad value" }
+        let angle = min(max(value, 0), 180)          // 物理上不会超过 180°
+        DispatchQueue.main.async { [weak self] in self?.onHinge?(angle) }
         return "ok"
     }
 
@@ -258,6 +299,22 @@ final class RemoteControl {
           <button id="reset" class="ghost">复位（展开）</button>
         </div>
 
+        <div class="card">
+          <div class="row"><span>陀螺仪铰链模式</span><span id="gyroState" class="pill">未启用</span></div>
+          <div class="big" id="gyroAngle">--°</div>
+          <div class="tip">把手机竖着贴到 MacBook 屏幕上（顶部朝屏幕顶边），MacBook 放在水平桌面上。
+          手机的姿态角会实时换算成屏幕开合角度，直接驱动折叠动画 —— 没有铰链传感器的机型也能“抬屏即折叠”。</div>
+          <div class="grid" style="margin-top:10px">
+            <button id="gyroStart">启用陀螺仪</button>
+            <button id="gyroStop" class="ghost">停止</button>
+          </div>
+          <div class="grid" style="margin-top:10px">
+            <button id="gyroZero" class="ghost">标定为「完全合上」</button>
+            <button id="gyroMount" class="ghost">贴法：屏幕背面</button>
+          </div>
+          <div class="tip" id="gyroTip">第一次使用：合上 MacBook → 点「标定为完全合上」→ 再掀开屏幕，数值应从 0° 跟着变大；若数值不跟着变大，点一下「贴法」切换后再标定一次。</div>
+        </div>
+
         <div class="tip" id="tip">拖动滑块可实时控制折叠程度。</div>
 
         <script>
@@ -293,6 +350,105 @@ final class RemoteControl {
           slider.oninput = function () {
             progressText.textContent = slider.value + '%';
             send('progress', (slider.value / 100).toFixed(3));
+          };
+
+          // ---------- 陀螺仪铰链模式 ----------
+          // 原理：手机贴屏幕上时，屏幕法线绕铰链轴旋转，重力在手机 y/z 轴上的投影可直接算出开合角。
+          //   贴屏幕背面（合盖时手机屏朝上）：lid = 180 − atan2(−gy, gz)
+          //   贴屏幕正面（合盖时手机屏朝下）：lid = atan2(−gy, gz)
+          // 结果 0 = 完全合上，90 = 屏幕竖直，135 = 向后仰 45°，与 MacBook 铰链角度定义一致。
+          var gyroMount = localStorage.getItem('mackzMount') || 'back';
+          var gyroZero = parseFloat(localStorage.getItem('mackzZero') || '0') || 0;
+          var gyroLastLid = null;
+          var gyroLastSend = 0;
+          var gyroStateEl = document.getElementById('gyroState');
+          var gyroAngleEl = document.getElementById('gyroAngle');
+          var gyroTipEl = document.getElementById('gyroTip');
+          var gyroMountBtn = document.getElementById('gyroMount');
+
+          function refreshMountLabel() {
+            gyroMountBtn.textContent = '贴法：' + (gyroMount === 'back' ? '屏幕背面' : '屏幕正面');
+          }
+          refreshMountLabel();
+
+          function lidAngleFrom(g) {
+            var raw = Math.atan2(-g.y, g.z) * 180 / Math.PI;
+            raw = ((raw % 360) + 360) % 360;              // 归一化，避开 ±180° 附近的跳变
+            var lid = gyroMount === 'back' ? 180 - raw : (raw > 180 ? 360 - raw : raw);
+            return Math.min(Math.max(lid, 0), 180);
+          }
+
+          function onMotion(e) {
+            var g = e.accelerationIncludingGravity;
+            if (!g || g.y === null || g.z === null) return;
+            gyroLastLid = lidAngleFrom(g);
+            var angle = Math.max(0, gyroLastLid - gyroZero);
+            gyroAngleEl.textContent = Math.round(angle) + '°';
+            var now = Date.now();
+            if (now - gyroLastSend < 50) return;           // 限流到 20Hz，避免刷爆局域网
+            gyroLastSend = now;
+            fetch('/hinge?t=' + encodeURIComponent(token) + '&v=' + angle.toFixed(2), { cache: 'no-store' })
+              .then(function (r) {
+                if (r.ok) { gyroStateEl.textContent = '接管中'; gyroStateEl.className = 'pill ok'; }
+                else { gyroStateEl.textContent = '口令无效'; gyroStateEl.className = 'pill'; }
+              })
+              .catch(function () { gyroStateEl.textContent = '连接断开'; gyroStateEl.className = 'pill'; });
+          }
+
+          function gyroBegin() {
+            window.addEventListener('devicemotion', onMotion, true);
+            gyroStateEl.textContent = '已启用';
+            gyroTipEl.textContent = '保持本页在前台：切到后台或锁屏会暂停上报，Mac 会自动交回本机传感器。';
+          }
+
+          document.getElementById('gyroStart').onclick = function () {
+            // 运动传感器只在安全上下文（https / localhost）下开放，http 局域网地址会被浏览器直接拒绝
+            if (!window.isSecureContext) {
+              gyroTipEl.textContent = '当前不是安全上下文：请用 MacKZ 设置面板里那个 https:// 开头的地址打开本页（会提示证书不受信任，点「继续访问」即可）。';
+              return;
+            }
+            if (!window.DeviceMotionEvent) {
+              gyroTipEl.textContent = '这个浏览器不支持运动传感器（DeviceMotion）。';
+              return;
+            }
+            if (typeof window.DeviceMotionEvent.requestPermission === 'function') {
+              // iOS 13+ 必须在用户手势里申请权限
+              window.DeviceMotionEvent.requestPermission().then(function (res) {
+                if (res === 'granted') { gyroBegin(); }
+                else { gyroTipEl.textContent = '未授权：请在 iOS「设置 → Safari → 运动与方向访问」中打开，然后重新点「启用陀螺仪」。'; }
+              }).catch(function () {
+                gyroTipEl.textContent = '申请权限失败：必须用 https 打开，且要由点击按钮触发。';
+              });
+            } else {
+              gyroBegin();
+            }
+          };
+
+          document.getElementById('gyroStop').onclick = function () {
+            window.removeEventListener('devicemotion', onMotion, true);
+            gyroStateEl.textContent = '已停止';
+            gyroStateEl.className = 'pill';
+            gyroAngleEl.textContent = '--°';
+            gyroTipEl.textContent = '已停止上报，Mac 会在 1.5 秒内交回本机传感器。';
+          };
+
+          document.getElementById('gyroZero').onclick = function () {
+            if (gyroLastLid === null) {
+              gyroTipEl.textContent = '先点「启用陀螺仪」，等角度显示出来再标定。';
+              return;
+            }
+            gyroZero = gyroLastLid;                        // 当前姿态记为 0°（完全合上）
+            localStorage.setItem('mackzZero', String(gyroZero));
+            gyroTipEl.textContent = '已把当前姿态标定为 0°。掀开屏幕，数值应从 0° 开始变大。';
+          };
+
+          gyroMountBtn.onclick = function () {
+            gyroMount = gyroMount === 'back' ? 'front' : 'back';
+            localStorage.setItem('mackzMount', gyroMount);
+            refreshMountLabel();
+            gyroZero = 0;
+            localStorage.setItem('mackzZero', '0');
+            gyroTipEl.textContent = '已切换贴法并清除标定：请合上 MacBook 后重新点「标定为完全合上」。';
           };
         </script>
         </body>

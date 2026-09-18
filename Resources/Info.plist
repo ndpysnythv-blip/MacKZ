@@ -13,9 +13,9 @@
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.7.1</string>
+    <string>1.7.2</string>
     <key>CFBundleVersion</key>
-    <string>22</string>
+    <string>23</string>
     <!-- 应用图标：由 build.sh 用 Resources/logo.jpg 自动生成 AppIcon.icns（作者 KDXZHX 的 logo） -->
     <key>CFBundleIconFile</key>
     <string>AppIcon</string>
@@ -30,5 +30,8 @@
     <true/>
     <key>NSSupportsAutomaticGraphicsSwitching</key>
     <true/>
+    <!-- 手机遥控 / 手机陀螺仪：Mac 上会开启一个只监听局域网的本地服务，供手机浏览器连接 -->
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>MacKZ 会在局域网内开启一个本地服务，供手机浏览器打开遥控页面、并接收手机陀螺仪的姿态数据来模拟 MacBook 铰链开合角度。数据只在本机与手机之间传输，不会上传到任何服务器。</string>
 </dict>
 </plist>

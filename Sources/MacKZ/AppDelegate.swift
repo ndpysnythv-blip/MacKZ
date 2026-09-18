@@ -17,6 +17,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// 手机遥控（演示用）：局域网 HTTP 服务
     private let remote = RemoteControl()
     private var remoteStatus = "未启动"
+    /// 手机陀螺仪数据有效期：收到数据后一段时间内由手机接管角度，本机传感器读数被忽略
+    private var phoneHingeDeadline: CFTimeInterval = 0
+    private var phoneHingeWatchdog: Timer?
     private var status: StatusBarController!
     private var settings: SettingsWindowController!
 
@@ -103,6 +106,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.remoteStatus = text
             self?.settings?.refreshRemoteInfo()
         }
+        // 手机陀螺仪：手机贴在屏幕上时，用手机姿态角代替铰链传感器
+        remote.onHinge = { [weak self] angle in self?.acceptPhoneHinge(angle) }
         settings.remoteInfoProvider = { [weak self] in
             guard let self else { return (enabled: false, url: "", status: "未启动") }
             return (enabled: self.remote.isRunning, url: self.remote.accessURL, status: self.remoteStatus)
@@ -115,7 +120,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 传感器线程 -> 主线程（30Hz 级别的派发开销可忽略）
         sensor.onAngle = { [weak self] angle in
             DispatchQueue.main.async {
-                self?.engine.update(angle: angle, timestamp: CACurrentMediaTime())
+                guard let self else { return }
+                // 手机陀螺仪接管期间忽略本机读数，避免两个数据源互相打架
+                if CACurrentMediaTime() < self.phoneHingeDeadline { return }
+                self.engine.update(angle: angle, timestamp: CACurrentMediaTime())
             }
         }
         sensor.onStatus = { [weak self] text in
@@ -146,6 +154,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         sensor.stop()
         remote.stop()
+        phoneHingeWatchdog?.invalidate()
+        phoneHingeWatchdog = nil
+    }
+
+    // MARK: - 手机陀螺仪接管铰链角度
+
+    /// 手机把自身姿态换算成「屏幕开合角」后以 20Hz 上报（0 = 完全合上，与内置传感器同一套定义）。
+    /// 收到第一帧即由手机接管角度，本机传感器读数被忽略；
+    /// 超过 1.5 秒没有新数据（锁屏 / 切后台 / 离开 Wi-Fi）自动交还本机传感器。
+    private func acceptPhoneHinge(_ angle: Double) {
+        guard config.phoneGyro, angle.isFinite else { return }
+        let now = CACurrentMediaTime()
+        if now > phoneHingeDeadline {
+            status.setSensorStatus("手机陀螺仪接管中")
+            NSLog("[MacKZ] 手机陀螺仪开始接管铰链角度")
+        }
+        phoneHingeDeadline = now + 1.5
+        engine.update(angle: angle, timestamp: now)
+        startPhoneHingeWatchdog()
+    }
+
+    /// 看门狗：手机数据中断后把角度控制权交还本机传感器
+    private func startPhoneHingeWatchdog() {
+        guard phoneHingeWatchdog == nil else { return }
+        let timer = Timer(timeInterval: 0.5, repeats: true) { [weak self] timer in
+            guard let self else {
+                timer.invalidate()
+                return
+            }
+            guard CACurrentMediaTime() >= self.phoneHingeDeadline else { return }
+            timer.invalidate()
+            self.phoneHingeWatchdog = nil
+            self.status.setSensorStatus(self.sensor.isRunning ? "运行中（Lid Angle Sensor）" : "已停用")
+            NSLog("[MacKZ] 手机陀螺仪数据中断，已交还本机传感器")
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        phoneHingeWatchdog = timer
     }
 
     // MARK: - 配置应用
@@ -499,17 +544,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.terminate(nil)
     }
 
-    /// 统一配置弹窗：设置面板 1200 层、动画覆盖层 999 层、更新进度窗 1300 层，
-    /// 普通 NSAlert 是默认层级会被它们压在下面（用户根本看不到），所以这里强制置顶到最高层，
-    /// 并加入「所有空间」，保证全屏 App 上也能弹出。
+    /// 统一配置弹窗：弹窗必须永远压在最上面，否则会被自己的窗口挡住（覆盖动画层 999、
+    /// 设置面板 1200、更新进度窗），所以这里用全局最高层级 + 主动激活 + 模态期间二次压层。
     @discardableResult
     private func present(_ alert: NSAlert) -> NSApplication.ModalResponse {
         let window = alert.window
-        window.level = NSWindow.Level(rawValue: 2000)
-        window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        window.level = macKZTopWindowLevel
+        window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
         window.animationBehavior = .none
-        NSApp.activate(ignoringOtherApps: true)
+        window.hidesOnDeactivate = false
+        macKZActivateSelf()
+        window.makeKeyAndOrderFront(nil)
         window.orderFrontRegardless()
+        // 模态会话期间再压一次层级：
+        // NSAlert 弹出时会重新布局窗口，个别系统版本上会把 level 改回模态面板默认值（8），
+        // 那一瞬间弹窗就会被覆盖动画层/设置面板盖住 —— 排队再设一次，保证始终在最上面。
+        DispatchQueue.main.async {
+            window.level = macKZTopWindowLevel
+            window.orderFrontRegardless()
+        }
         return alert.runModal()
     }
 
