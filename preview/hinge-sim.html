@@ -94,6 +94,13 @@
   <div class="card">
     <h2>视觉参数</h2>
     <div class="row">
+      <label>折叠方向</label>
+      <select id="foldDirection">
+        <option value="down" selected>向下收（内容折向屏幕下方）</option>
+        <option value="up">向上收（参考实现原始方向）</option>
+      </select>
+    </div>
+    <div class="row">
       <label>视觉风格</label>
       <select id="style">
         <option value="clear">Clear · 轻模糊</option>
@@ -138,6 +145,7 @@ uniform float uBlur;        // 玻璃散射强度
 uniform float uDarkness;    // 幕布压暗强度
 uniform float uDispersion;  // 径向色散强度
 uniform float uAngleScale;  // 玻璃最大立起角比例（foldAngleDeg / 90）
+uniform float uFlip;        // 折叠方向：1 = 铰链在屏幕顶边（内容向下方收）
 uniform vec3  uEye;         // 视点（x、y 相对屏宽/屏高，z 相对屏高）
 uniform int   uPass;        // 0 投影 / 1 横向模糊 / 2 纵向模糊 / 3 色散
 
@@ -154,20 +162,25 @@ vec3 hingeGlass(vec2 pos){
   float angle = clamp(uProgress, 0.0, 1.0) * clamp(uAngleScale, 0.05, 1.0) * PI_2;
   if (angle < 1e-5) return layer(pos, size);          // 参考姿态精确直通
 
-  // 幕布压暗：完全合上时顶部仍保留 40% 透过率，桌面永不熄灭
+  bool atTop = uFlip > 0.5;
+  float far = atTop ? (1.0 - pos.y / size.y) : (pos.y / size.y);
+
+  // 幕布压暗：完全合上时远端仍保留 40% 透过率，桌面永不熄灭
   float curtainProgress = smoothstep(0.20, 1.0, clamp(uProgress, 0.0, 1.0));
   float feather = 0.22;
   float edge = mix(-feather, 0.90, curtainProgress);
-  float curtain = 1.0 - smoothstep(edge - feather, edge + feather, pos.y / size.y);
+  float curtain = 1.0 - smoothstep(edge - feather, edge + feather, far);
   float visibility = 1.0 - min(0.60 * uDarkness, 0.80) * curtain;
 
   float opticalStrength = smoothstep(0.0, 1.5 / 90.0, uProgress);
-  float d = size.y - pos.y;                            // 距底边铰链的高度
+  float d = atTop ? pos.y : (size.y - pos.y);          // 距铰链的高度
   float eyeDistance = size.y * max(uEye.z, 1.1);
   float sine = sin(angle), cosine = cos(angle);
   vec3 eye = vec3(size.x * uEye.x, size.y * uEye.y, eyeDistance);
-  // 玻璃点：绕底边旋转后位于 (x, height - d·cosθ, d·sinθ)
-  vec3 glass = vec3(pos.x, size.y - d * cosine, d * sine);
+  // 玻璃点：绕铰链旋转后立起
+  vec3 glass = atTop
+    ? vec3(pos.x, d * cosine, d * sine)
+    : vec3(pos.x, size.y - d * cosine, d * sine);
   float depth = eye.z - glass.z;
   if (depth <= 1e-5) return vec3(0.0);
   float rayScale = eye.z / depth;
@@ -221,15 +234,16 @@ vec3 hingeChromatic(vec2 pos){
   if (uDispersion <= 0.0 || closing <= 0.0) return center;
 
   vec2 size = max(uSize, vec2(1.0));
-  float h = clamp((size.y - pos.y) / size.y, 0.0, 1.0);
+  float h = clamp((uFlip > 0.5 ? pos.y : (size.y - pos.y)) / size.y, 0.0, 1.0);
   float contact = smoothstep(0.035, 0.20, h);
   float onset = smoothstep(0.0, 2.5 / 90.0, closing);
   float amount = min(size.y * 0.009, 10.0) * clamp(uDispersion, 0.0, 1.0)
                * sin(closing * PI_2) * onset * contact * pow(h, 1.35);
   if (amount < 0.001) return center;
 
-  // 窄接触带保持中性，顶部与外缘分离增大
-  vec2 radial = vec2((pos.x / size.x - 0.5) * 0.65, -h);
+  // 窄接触带保持中性，远端与外缘分离增大
+  vec2 radial = vec2((pos.x / size.x - 0.5) * 0.65,
+                     uFlip > 0.5 ? h : -h);
   vec2 offset = radial / max(length(radial), 0.0001) * amount;
   vec2 upper = max(size - 0.5, vec2(0.0));
   vec2 rp = clamp(pos + offset, vec2(0.0), upper);
@@ -322,7 +336,7 @@ if (gl) {
   gl.linkProgram(prog);
   if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog));
   gl.useProgram(prog);
-  ["uLayer","uSize","uProgress","uBlur","uDarkness","uDispersion","uAngleScale","uEye","uPass"]
+  ["uLayer","uSize","uProgress","uBlur","uDarkness","uDispersion","uAngleScale","uFlip","uEye","uPass"]
     .forEach(n => U[n] = gl.getUniformLocation(prog, n));
 }
 
@@ -333,7 +347,7 @@ const srcTex = gl ? gl.createTexture() : null;
 let W = 0, H = 0;
 const texA = gl ? gl.createTexture() : null, texB = gl ? gl.createTexture() : null;
 const fbA = gl ? gl.createFramebuffer() : null, fbB = gl ? gl.createFramebuffer() : null;
-const state = { angle: 90, trigger: 90, close: 0, style: "frosted", viewpoint: "desk", foldAngle: 90 };
+const state = { angle: 90, trigger: 90, close: 0, style: "frosted", viewpoint: "desk", foldAngle: 90, foldDirection: "down" };
 
 function makeTarget(tex, w, h){
   gl.bindTexture(gl.TEXTURE_2D, tex);
@@ -384,6 +398,7 @@ function pass(index, layerTex, targetFB){
   gl.uniform1f(U.uDarkness, STYLES[state.style].darkness);
   gl.uniform1f(U.uDispersion, STYLES[state.style].dispersion);
   gl.uniform1f(U.uAngleScale, Math.min(Math.max(state.foldAngle, 5), 90) / 90);
+  gl.uniform1f(U.uFlip, state.foldDirection === "down" ? 1 : 0);
   const eye = VIEWPOINTS[state.viewpoint];
   gl.uniform3f(U.uEye, eye[0], eye[1], eye[2]);
   gl.uniform1i(U.uPass, index);
@@ -453,6 +468,7 @@ function renderCPU(){
   const eyeCfg = VIEWPOINTS[state.viewpoint];
   const angleScale = Math.min(Math.max(state.foldAngle, 5), 90) / 90;
   const angle = Math.min(Math.max(p, 0), 1) * angleScale * Math.PI / 2;
+  const atTop = state.foldDirection === "down";       // 铰链在顶边 = 内容向屏幕下方收
 
   // ---------- 第一趟：固定平面透视投影 ----------
   const flat = angle < 1e-5;
@@ -466,13 +482,14 @@ function renderCPU(){
 
   for (let y = 0; y < sh; y++){
     const py = (y + 0.5) * lsy;
-    const d = sizeY - py;                             // 距底边铰链的高度
+    const d = atTop ? py : (sizeY - py);              // 距铰链的高度
     const contact = smoothstep(sizeY * 0.035, sizeY * 0.20, d);
     const separation = d * sine;
     const scatter = separation * 0.070 * contact * opticalStrength * blur;
     const radius = scatter / Math.sqrt(1 + (scatter / 36) * (scatter / 36));
     const transmission = 1 - Math.min(radius * 0.0004, 0.015);
-    const curtain = 1 - smoothstep(edge - feather, edge + feather, py / sizeY);
+    const far = atTop ? (1 - py / sizeY) : (py / sizeY);
+    const curtain = 1 - smoothstep(edge - feather, edge + feather, far);
     const visibility = 1 - Math.min(0.60 * dark, 0.80) * curtain;
 
     for (let x = 0; x < sw; x++){
@@ -488,7 +505,8 @@ function renderCPU(){
       if (depth <= 1e-5){ a[o] = a[o + 1] = a[o + 2] = 0; continue; }
       const rayScale = eyeDistance / depth;
       const hx = eyeX + (px - eyeX) * rayScale;
-      const hy = eyeY + ((sizeY - d * cosine) - eyeY) * rayScale;
+      const glassY = atTop ? (d * cosine) : (sizeY - d * cosine);
+      const hy = eyeY + (glassY - eyeY) * rayScale;
       let r = 0, g = 0, bl = 0;
       if (hx >= 0 && hx < sizeX && hy >= 0 && hy < sizeY){
         const si = cpuIndex(hx, hy);
@@ -513,13 +531,13 @@ function renderCPU(){
       let r = a[o], g = a[o + 1], bl = a[o + 2];
       if (disp > 0 && p > 0){
         const px = (x + 0.5) * lsx, py = (y + 0.5) * lsy;
-        const h = Math.min(Math.max((sizeY - py) / sizeY, 0), 1);
+        const h = Math.min(Math.max((atTop ? py : (sizeY - py)) / sizeY, 0), 1);
         const contact = smoothstep(0.035, 0.20, h);
         const onset = smoothstep(0, 2.5 / 90, p);
         const amount = Math.min(sizeY * 0.009, 10) * disp * Math.sin(p * Math.PI / 2)
                      * onset * contact * Math.pow(h, 1.35);
         if (amount > 0.001){
-          const rx = (px / sizeX - 0.5) * 0.65, ry = -h;
+          const rx = (px / sizeX - 0.5) * 0.65, ry = atTop ? h : -h;
           const len = Math.max(Math.hypot(rx, ry), 0.0001);
           const ox = rx / len * amount, oy = ry / len * amount;
           const ri = cpuIndex(px + ox, py + oy);
@@ -545,11 +563,12 @@ function cpuGaussian(from, to, dirX){
   const optical = smoothstep(0, 1.5 / 90, p);
   const stepScale = dirX ? lsx : lsy;                 // 全分辨率像素 → 低分辨率像素
   const angleScale = Math.min(Math.max(state.foldAngle, 5), 90) / 90;
+  const atTop = state.foldDirection === "down";
   const sizeY = H;
 
   for (let y = 0; y < sh; y++){
     const py = (y + 0.5) * lsy;
-    const d = sizeY - py;
+    const d = atTop ? py : (sizeY - py);
     const contact = smoothstep(sizeY * 0.035, sizeY * 0.20, d);
     const scatter = d * Math.sin(Math.min(Math.max(p, 0), 1) * angleScale * Math.PI / 2) * 0.070 * contact * optical * blur;
     const radius = scatter / Math.sqrt(1 + (scatter / 36) * (scatter / 36));
@@ -710,6 +729,7 @@ foldAngleEl.addEventListener("input", () => {
   document.getElementById("foldAngleVal").textContent = state.foldAngle + "°";
 });
 document.getElementById("style").addEventListener("change", e => state.style = e.target.value);
+document.getElementById("foldDirection").addEventListener("change", e => state.foldDirection = e.target.value);
 document.getElementById("viewpoint").addEventListener("change", e => state.viewpoint = e.target.value);
 
 /** 还原初始角度并开始一段脚本动画 */

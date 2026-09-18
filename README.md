@@ -184,6 +184,7 @@ launchctl load ~/Library/LaunchAgents/com.mackz.plugin.plist
 | `visualStyle` | "frosted" | 视觉预设：`clear` / `frosted` / `cinematic`（对应 blur 0.25/1/1.3，darkness 0.2/1/1.2，色散 0/0/1） |
 | `viewpoint` | "desk" | 视点：`desk` 俯看（笔记本放桌面）/ `front` 平视（支架抬升） |
 | `foldAngleDeg` | 90 | 玻璃完全立起时的角度。90 = 与参考实现完全一致（末端几何退化为整屏黑）；调小到 70~80 可让完全折上时仍保留桌面画面 |
+| `foldDirection` | "down" | **折叠方向**：`down` = 铰链在屏幕顶边、画面内容向屏幕下方收（默认，MacBook 观感）；`up` = 参考实现的原始方向（内容向上抽走） |
 | `captureScreen` | true | 是否实时抓屏做重投影（关闭则只显示暗场） |
 | `captureFPS` | 60 | 采集帧率上限 |
 | `captureIdleStop` | true | 完全展开时停采集省电；false = 常驻采集响应更快 |

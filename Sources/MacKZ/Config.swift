@@ -56,6 +56,8 @@ struct Config: Codable {
     var viewpoint = "desk"
     /// 玻璃完全立起时的角度（度）。90 = 与参考实现完全一致；调小可让完全折上时仍保留画面（末端不会整屏归黑）
     var foldAngleDeg = 90.0
+    /// 折叠方向：down = 铰链在屏幕顶边、画面内容向屏幕下方收（默认）；up = 参考实现的原始方向（内容向上抽走）
+    var foldDirection = "down"
     /// 是否显示进度角标
     var showBadge = true
     /// 启动后自动检查更新（发现新版本才提示，平时完全静默）

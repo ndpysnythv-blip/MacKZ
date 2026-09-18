@@ -28,7 +28,7 @@ enum FoldShader {
     // 对每个玻璃像素，把静止视点的射线延伸到固定桌面平面求交采样。
     float4 hingeGlass(float2 position, texture2d<float> layer, float4 bounds,
                       float progress, float blurStrength, float darknessStrength, float3 viewpoint,
-                      float angleScale) {
+                      float angleScale, float flip) {
         float2 size = bounds.zw;
         float2 p = position - bounds.xy;
         // 玻璃立起角 = progress × 最大角（angleScale = foldAngleDeg / 90）
@@ -36,24 +36,32 @@ enum FoldShader {
         // 参考角（progress=0）下精确直通，避免颜色/几何跳变
         if (angle < 1e-5f) return float4(layer.sample(linearSampler, position / bounds.zw).rgb, 1.0f);
 
-        // 幕布压暗：延迟且更宽，绝不熄灭桌面；完全合上时顶部保留 40% 透过率
+        // 折叠方向：flip=1 → 铰链在屏幕顶边（画面内容向屏幕下方收，MacBook 观感）；
+        //            flip=0 → 铰链在屏幕底边（参考实现的原始方向，内容向上抽走）
+        bool atTop = flip > 0.5f;
+        // 远离铰链的一侧（归一化）：幕布压暗与色散渐变都以它为基准
+        float far = atTop ? (1.0f - p.y / size.y) : (p.y / size.y);
+
+        // 幕布压暗：延迟且更宽，绝不熄灭桌面；完全合上时远端保留 40% 透过率
         float curtainProgress = smoothstep(0.20f, 1.0f, clamp(progress, 0.0f, 1.0f));
         float feather = 0.22f;
         float edge = mix(-feather, 0.90f, curtainProgress);
-        float curtain = 1.0f - smoothstep(edge - feather, edge + feather, p.y / size.y);
+        float curtain = 1.0f - smoothstep(edge - feather, edge + feather, far);
         float visibility = 1.0f - min(0.60f * darknessStrength, 0.80f) * curtain;
 
         // 参考姿态附近光学散射平滑缓入
         float opticalStrength = smoothstep(0.0f, 1.5f / 90.0f, progress);
-        float distance = size.y - p.y;              // 距底边铰链的像素高度
+        float distance = atTop ? p.y : (size.y - p.y);   // 距铰链的像素高度
         // 视距：以屏高为单位缩放
         float eyeDistance = size.y * max(viewpoint.z, 1.1f);
         float sine = sin(angle);
         float cosine = cos(angle);
         // 视点（固定不动）
         float3 eye = float3(size.x * viewpoint.x, size.y * viewpoint.y, eyeDistance);
-        // 玻璃点：绕底边旋转后位于 (x, height - d·cosθ, d·sinθ)
-        float3 glass = float3(p.x, size.y - distance * cosine, distance * sine);
+        // 玻璃点：绕铰链旋转后，玻璃面立起
+        float3 glass = atTop
+            ? float3(p.x, distance * cosine, distance * sine)
+            : float3(p.x, size.y - distance * cosine, distance * sine);
         float depth = eye.z - glass.z;
         if (depth <= 1e-5f) return float4(0, 0, 0, 1);
         // 射线 eye→glass 延伸到 z=0 平面的交点
@@ -112,14 +120,15 @@ enum FoldShader {
     // ---------- 径向色散（NameDrop 风格的再创作，非复刻 Apple 实现） ----------
     // 在模糊之后施加；固定平面投影不受影响。
     float4 hingeChromatic(float2 position, texture2d<float> layer,
-                          float4 bounds, float progress, float strength) {
+                          float4 bounds, float progress, float strength, float flip) {
         float4 center = layer.sample(linearSampler, position / bounds.zw);
         float closing = clamp(progress, 0.0f, 1.0f);
         if (strength <= 0.0f || closing <= 0.0f) return center;
 
         float2 size = max(bounds.zw, float2(1.0f));
         float2 p = position - bounds.xy;
-        float heightFromHinge = clamp((size.y - p.y) / size.y, 0.0f, 1.0f);
+        bool atTop = flip > 0.5f;
+        float heightFromHinge = clamp((atTop ? p.y : (size.y - p.y)) / size.y, 0.0f, 1.0f);
         float contact = smoothstep(0.035f, 0.20f, heightFromHinge);
         float onset = smoothstep(0.0f, 2.5f / 90.0f, closing);
         float amount = min(size.y * 0.009f, 10.0f) * clamp(strength, 0.0f, 1.0f)
@@ -127,8 +136,9 @@ enum FoldShader {
                      * pow(heightFromHinge, 1.35f);
         if (amount < 0.001f) return center;
 
-        // 围绕底部中点铰链的径向色散：窄接触带保持中性，顶部与外缘分离增大
-        float2 radial = float2((p.x / size.x - 0.5f) * 0.65f, -heightFromHinge);
+        // 围绕铰链的径向色散：窄接触带保持中性，远端与外缘分离增大
+        float2 radial = float2((p.x / size.x - 0.5f) * 0.65f,
+                               atTop ? heightFromHinge : -heightFromHinge);
         float2 offset = radial / max(length(radial), 0.0001f) * amount;
         float2 upper = max(size - 0.5f, float2(0.0f));
         float2 redPosition = bounds.xy + clamp(p + offset, float2(0.0f), upper);
@@ -141,7 +151,7 @@ enum FoldShader {
     // ---------- Uniform / 顶点 ----------
     struct HingeUniforms {
         float4 geometry;   // 宽、高、progress、blur 强度
-        float4 optics;     // 压暗强度、色散强度、玻璃最大立起角比例（foldAngleDeg/90）、未用
+        float4 optics;     // 压暗强度、色散强度、玻璃最大立起角比例（foldAngleDeg/90）、折叠方向（1=铰链在顶边）
         float4 eye;        // 视点 x、y、z（相对屏幕尺寸）、未用
     };
     struct HingeVertex { float4 position [[position]]; float2 uv; };
@@ -155,7 +165,7 @@ enum FoldShader {
     fragment float4 hingeProject(HingeVertex in [[stage_in]], texture2d<float> source [[texture(0)]],
                                  constant HingeUniforms &u [[buffer(0)]]) {
         return hingeGlass(in.uv * u.geometry.xy, source, float4(0, 0, u.geometry.xy),
-                          u.geometry.z, u.geometry.w, u.optics.x, u.eye.xyz, u.optics.z);
+                          u.geometry.z, u.geometry.w, u.optics.x, u.eye.xyz, u.optics.z, u.optics.w);
     }
     fragment float4 hingeBlurX(HingeVertex in [[stage_in]], texture2d<float> source [[texture(0)]],
                                constant HingeUniforms &u [[buffer(0)]]) {
@@ -170,7 +180,7 @@ enum FoldShader {
     fragment float4 hingeDispersion(HingeVertex in [[stage_in]], texture2d<float> source [[texture(0)]],
                                      constant HingeUniforms &u [[buffer(0)]]) {
         return hingeChromatic(in.uv * u.geometry.xy, source, float4(0, 0, u.geometry.xy),
-                              u.geometry.z, u.optics.y);
+                              u.geometry.z, u.optics.y, u.optics.w);
     }
     """
 }

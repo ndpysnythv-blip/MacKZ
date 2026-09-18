@@ -47,6 +47,8 @@ final class MetalFoldView: NSView {
     var glassDispersion: Double = 0 { didSet { setNeedsFrame() } }
     /// 玻璃完全立起时的角度（度）。90 = 与参考实现一致（末端几何退化会整屏归黑）；调小可保留画面
     var foldAngleDeg: Double = 90 { didSet { setNeedsFrame() } }
+    /// 折叠方向：true = 铰链在屏幕顶边，画面内容向屏幕下方收（默认）；false = 参考实现原始方向
+    var foldToBottom: Bool = true { didSet { setNeedsFrame() } }
     /// 视点
     var viewpoint: Viewpoint = .desk { didSet { setNeedsFrame() } }
     /// 渲染分辨率比例（0.5~1），越低越省电，模糊本身会掩盖分辨率损失
@@ -58,6 +60,7 @@ final class MetalFoldView: NSView {
         glassDarkness = config.styleDarkness
         glassDispersion = config.styleDispersion
         foldAngleDeg = config.foldAngleDeg
+        foldToBottom = config.foldDirection != "up"
         viewpoint = config.viewpoint == "front" ? .front : .desk
         renderScale = CGFloat(config.renderScale)
     }
@@ -249,7 +252,8 @@ final class MetalFoldView: NSView {
         var u = Uniforms()
         u.geometry = SIMD4<Float>(Float(w), Float(h), Float(p), Float(glassBlur))
         u.optics = SIMD4<Float>(Float(glassDarkness), Float(glassDispersion),
-                                Float(min(max(foldAngleDeg, 5), 90) / 90.0), 0)
+                                Float(min(max(foldAngleDeg, 5), 90) / 90.0),
+                                foldToBottom ? 1 : 0)
         let eye = viewpoint.eye
         u.eye = SIMD4<Float>(eye.x, eye.y, eye.z, 0)
 

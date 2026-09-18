@@ -25,6 +25,10 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     var onRepairCapture: (() -> Void)?
     /// 手动拖动预览：参数为折叠进度 0~1
     var onManualProgress: ((Double) -> Void)?
+    /// 模拟合上：播放一次 0 → 1 的折叠动画（用于没有铰链传感器的机型）
+    var onSimulateClose: (() -> Void)?
+    /// 模拟打开：播放一次 1 → 0 的展开动画
+    var onSimulateOpen: (() -> Void)?
     /// 实时状态拉取：角度 / 阶段 / 屏幕录制权限
     var statusProvider: (() -> (angle: String, phase: String, capture: String))?
 
@@ -174,6 +178,10 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
                 ("front", "平视（支架抬升 / 外接屏）")
             ]),
             sliderRow("玻璃最大立起角", \.foldAngleDeg, 30...90, decimals: 0, suffix: "°"),
+            popupRow("折叠方向", \.foldDirection, options: [
+                ("down", "向下收（内容折向屏幕下方，推荐）"),
+                ("up", "向上收（参考实现原始方向）")
+            ]),
             sliderRow("覆盖层不透明度", \.overlayAlpha, 0.1...1.0, decimals: 2, suffix: ""),
             intSliderRow("覆盖窗口层级", \.overlayLevel, 10...2000, suffix: "")
         ]))
@@ -212,7 +220,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         progressSlider.action = #selector(SliderHandler.fire(_:))
 
         let manualTip = NSTextField(wrappingLabelWithString:
-            "拖动滑块即可实时预览 Duo Continuity 折叠效果：0% = 完全展开（正常画面），100% = 完全折上。")
+            "拖动滑块即可实时预览 Duo Continuity 折叠效果：0% = 完全展开（正常画面），100% = 完全折上。\n「模拟合上 / 模拟打开」会播放完整动画（没有铰链传感器的机型也能体验）。")
         manualTip.font = .systemFont(ofSize: 11)
         manualTip.textColor = .tertiaryLabelColor
         manualTip.preferredMaxLayoutWidth = 520
@@ -220,7 +228,9 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         stack.addArrangedSubview(sectionBox(title: "手动预览（没有铰链传感器的机型也能体验）", rows: [
             makeRow(title: "折叠进度", views: [progressSlider, progressValue]),
             manualTip,
-            makeRow(views: [makeButton("播放一次开合", #selector(demo)),
+            makeRow(views: [makeButton("模拟合上", #selector(simulateClose)),
+                            makeButton("模拟打开", #selector(simulateOpen)),
+                            makeButton("播放一次开合", #selector(demo)),
                             makeButton("复位（完全展开）", #selector(resetManual))])
         ]))
 
@@ -474,6 +484,20 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     @objc private func probe() { onProbe?() }
     @objc private func demo() { onDemo?() }
     @objc private func checkUpdate() { onCheckUpdate?() }
+
+    /// 模拟合上：滑块同步到终点，避免界面与实际进度不一致
+    @objc private func simulateClose() {
+        onSimulateClose?()
+        manualSlider?.doubleValue = 1
+        manualValueLabel?.stringValue = "100%"
+    }
+
+    /// 模拟打开：回到完全展开
+    @objc private func simulateOpen() {
+        onSimulateOpen?()
+        manualSlider?.doubleValue = 0
+        manualValueLabel?.stringValue = "0%"
+    }
 
     private func flashStatus(_ text: String) {
         statusLabel?.stringValue = text

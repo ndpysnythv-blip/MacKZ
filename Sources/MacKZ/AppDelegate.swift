@@ -60,6 +60,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settings.onRequestCapture = { [weak self] in self?.requestCapturePermission() }
         settings.onRepairCapture = { [weak self] in self?.repairCapturePermission() }
         settings.onManualProgress = { [weak self] value in self?.engine.setManualProgress(value) }
+        settings.onSimulateClose = { [weak self] in self?.engine.playSingle(to: 1.0, duration: 0.7) }
+        settings.onSimulateOpen = { [weak self] in self?.engine.playSingle(to: 0.0, duration: 0.7) }
         settings.statusProvider = { [weak self] in
             guard let self else { return (angle: "--", phase: "--", capture: "未知") }
             let angle = self.engine.lastAngleDeg.map { String(format: "%.1f°", $0) } ?? "--"
@@ -96,9 +98,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 启动自检：主动申请「屏幕录制」权限（拿到桌面画面才能做 Duo Continuity 重投影）
         ensureCapturePermission()
 
-        // 启动后延迟自动检查更新（可在设置面板关闭）；更新包同样来自 GitHub Releases
+        // 启动后延迟自动检查更新（可在设置面板关闭）；发现新版本会直接弹出更新弹窗
         if config.autoCheckUpdate {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [weak self] in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in
                 self?.checkUpdate(silent: true)
             }
         }

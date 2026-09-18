@@ -21,6 +21,7 @@
   "visualStyle": "frosted",
   "viewpoint": "desk",
   "foldAngleDeg": 90,
+  "foldDirection": "down",
   "showBadge": true,
   "autoCheckUpdate": true
 }
