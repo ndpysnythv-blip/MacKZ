@@ -52,11 +52,22 @@ jobs:
             build/MacKZ.zip.sha256
           generate_release_notes: true
           body: |
-            ### 安装
-            1. 下载 `MacKZ.zip`，双击解压得到 `MacKZ.app`
-            2. 把 `MacKZ.app` 拖进「应用程序」文件夹
-            3. 首次打开：右键 →「打开」（未签名应用需此步骤放行）
-            4. 首次启动会自动申请「屏幕录制」权限，授权后程序会自动重启生效
+            ### 安装（推荐：终端一键，装完即可打开）
+
+            ```bash
+            curl -fsSL https://raw.githubusercontent.com/ndpysnythv-blip/MacKZ/main/scripts/install-app.sh | bash
+            ```
+
+            浏览器下载 `MacKZ.zip` 也可以，但下载的文件带系统隔离属性，首次打开会被 Gatekeeper 拦截，
+            解压拖进「应用程序」后执行一次即可放行：
+
+            ```bash
+            xattr -dr com.apple.quarantine /Applications/MacKZ.app
+            ```
+
+            ### 使用
+            1. 菜单栏出现笔记本图标 → 点「设置…」调参
+            2. 首次启动会自动申请「屏幕录制」权限，授权后程序自动重启生效
 
             ### 更新
             菜单栏图标 →「检查更新…」，有新版本会提示一键下载安装并重启。

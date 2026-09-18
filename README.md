@@ -5,11 +5,28 @@
 
 ---
 
-## 快速开始（下载即用，无需编译）
+## 快速开始
+
+### 方式一：终端一键安装（推荐，装完即可打开）
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ndpysnythv-blip/MacKZ/main/scripts/install-app.sh | bash
+```
+
+脚本会自动下载最新版、装到「应用程序」、去掉隔离属性并启动。
+（`curl` 下载的文件不带 `com.apple.quarantine`，所以不会被 Gatekeeper 拦截。）
+
+### 方式二：浏览器下载
 
 1. 打开 [Releases](https://github.com/ndpysnythv-blip/MacKZ/releases/latest)，下载 `MacKZ.zip`
 2. 解压得到 `MacKZ.app`，拖进「应用程序」文件夹
-3. 首次打开：**右键 →「打开」**（未签名应用需手动放行一次，之后双击即可）
+3. 浏览器下载的文件带隔离属性，首次打开会被系统拦下，执行这条命令放行即可：
+
+```bash
+xattr -dr com.apple.quarantine /Applications/MacKZ.app
+open /Applications/MacKZ.app
+```
+
 4. 首次启动会自动申请「屏幕录制」权限，授权后程序自动重启让权限生效
 5. 菜单栏出现笔记本图标 → 点「设置…」调参
 
