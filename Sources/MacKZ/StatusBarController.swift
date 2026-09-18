@@ -33,10 +33,17 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         enabled = config.enabled
         buildMenu()
         if let button = statusItem.button {
-            button.image = NSImage(systemSymbolName: "laptopcomputer", accessibilityDescription: "MacKZ")
-            button.image?.isTemplate = true
+            // 优先用 SF Symbol；万一该符号名在当前系统不可用就退回文字，确保图标一定可见
+            if let image = NSImage(systemSymbolName: "laptopcomputer", accessibilityDescription: "MacKZ") {
+                image.isTemplate = true
+                button.image = image
+            } else {
+                button.title = "KZ"
+            }
+            button.toolTip = "MacKZ · 点击打开菜单"
         }
         refreshEnabled()
+        NSLog("[MacKZ] 菜单栏图标已就绪")
     }
 
     // MARK: - 菜单构建

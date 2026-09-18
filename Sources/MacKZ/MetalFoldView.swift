@@ -46,7 +46,7 @@ final class MetalFoldView: NSView {
 
     // MARK: Metal 对象
     private let device: MTLDevice
-    private let queue: MTLCommandQueue
+    private let queue: MTLCommandQueue?
     private var foldPipeline: MTLRenderPipelineState?
     private var blurPipeline: MTLRenderPipelineState?
     private var blurTexture: MTLTexture?
@@ -54,11 +54,11 @@ final class MetalFoldView: NSView {
     private var needsFrame = true
     private var lastFailure: String?
 
-    private var metalLayer: CAMetalLayer { layer as! CAMetalLayer }
+    private var metalLayer: CAMetalLayer? { layer as? CAMetalLayer }
 
     init(frame: CGRect, device: MTLDevice) {
         self.device = device
-        self.queue = device.makeCommandQueue()!
+        self.queue = device.makeCommandQueue()
         super.init(frame: frame)
         wantsLayer = true
         buildPipelines()
@@ -94,6 +94,7 @@ final class MetalFoldView: NSView {
     }
 
     private func updateDrawableSize() {
+        guard let metalLayer else { return }
         let scale = window?.backingScaleFactor ?? 2
         metalLayer.contentsScale = scale
         let size = CGSize(width: max(bounds.width * renderScale * scale, 2),
@@ -165,9 +166,8 @@ final class MetalFoldView: NSView {
     // MARK: - 绘制
 
     private func draw() {
-        guard let foldPipeline, let blurPipeline, let source = sourceTexture,
+        guard let metalLayer, let foldPipeline, let blurPipeline, let source = sourceTexture,
               let drawable = metalLayer.nextDrawable() else { return }
-        let scale = renderScale
         let w = Int(metalLayer.drawableSize.width), h = Int(metalLayer.drawableSize.height)
         guard w > 1, h > 1 else { return }
 
@@ -187,7 +187,7 @@ final class MetalFoldView: NSView {
         u.halfWidth = u.aspect * 0.5
         u.brightness = 0.38
 
-        guard let cmd = queue.makeCommandBuffer() else { return }
+        guard let cmd = queue?.makeCommandBuffer() else { return }
 
         // ---- 第一趟：横向模糊（离屏纹理）----
         if blurTexture == nil || blurTexture!.width != w || blurTexture!.height != h {

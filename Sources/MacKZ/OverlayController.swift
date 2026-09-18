@@ -7,12 +7,15 @@ import QuartzCore
 /// 「全局生效 + 不干扰操作」不变：
 /// ignoresMouseEvents（鼠标穿透）、永不成为 key/main 窗口、高窗口层级、全空间常驻；
 /// 渲染全程在 GPU，主线程只写入几个 uniform。
+///
+/// 容错原则：Metal 不可用时**绝不崩溃**——只禁用渲染层，菜单栏与设置面板照常可用。
 final class OverlayController {
 
     /// 状态/错误反馈（主线程）
     var onStatus: ((String) -> Void)?
 
-    private let device: MTLDevice
+    /// Metal 设备；为 nil 表示本机不支持 Metal（此时渲染层整体降级为不可用）
+    private let device: MTLDevice?
     private var windows: [OverlayWindow] = []
     private var config: Config
     private var stream: ScreenCaptureStream?
@@ -21,10 +24,10 @@ final class OverlayController {
 
     init(config: Config) {
         self.config = config
-        guard let device = MTLCreateSystemDefaultDevice() else {
-            fatalError("本机不支持 Metal，MacKZ 无法运行")
+        self.device = MTLCreateSystemDefaultDevice()
+        if device == nil {
+            NSLog("[MacKZ] 本机不支持 Metal，渲染层已禁用（菜单栏与设置面板不受影响）")
         }
-        self.device = device
         rebuildWindows()
         NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification,
                                               object: nil, queue: .main) { [weak self] _ in
@@ -35,6 +38,7 @@ final class OverlayController {
     // MARK: - 渲染入口（主线程）
 
     func render(_ state: HingeRenderState) {
+        guard device != nil else { return }        // 渲染层不可用
         let p = min(max(state.progress, 0), 1)
         let active = config.enabled && state.active && p > 0.005 && p < 0.995
 
@@ -79,7 +83,7 @@ final class OverlayController {
     private var latestTexture: MTLTexture?
 
     private func startCaptureIfNeeded() {
-        guard config.captureScreen else { return }
+        guard config.captureScreen, let device else { return }
         if let stream, stream.isRunning { return }
         if #available(macOS 14.0, *) {
             let s = stream ?? ScreenCaptureStream(device: device)
@@ -131,8 +135,10 @@ final class OverlayController {
             window.close()
         }
         stopCapture()
-        windows = NSScreen.screens.map { OverlayWindow(screen: $0, device: device, config: config) }
+        windows = []
         visible = false
+        guard let device else { return }           // 无 Metal：不建窗口，其余功能照常
+        windows = NSScreen.screens.map { OverlayWindow(screen: $0, device: device, config: config) }
     }
 }
 

@@ -13,16 +13,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var settings: SettingsWindowController!
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        NSLog("[MacKZ] 启动中，版本 %@", UpdateChecker.currentVersion)
         ConfigStore.ensureExists()
 
-        overlay = OverlayController(config: config)
-        overlay.onStatus = { [weak self] message in self?.status.setRenderStatus(message) }
-        engine = HingeAnimationEngine(config: config)
-        engine.onUpdate = { [weak self] state in self?.overlay.render(state) }
-
-        // ---------- 菜单栏 ----------
+        // ---------- 菜单栏（最先创建：保证图标一定先出现，后续环节出错也不影响它）----------
         status = StatusBarController(config: config)
+
+        engine = HingeAnimationEngine(config: config)
+        engine.onUpdate = { [weak self] state in self?.overlay?.render(state) }
         status.engine = engine
+
+        // ---------- 覆盖渲染层（Metal 不可用时自动降级，不崩溃）----------
+        overlay = OverlayController(config: config)
+        overlay.onStatus = { [weak self] message in self?.status?.setRenderStatus(message) }
+
         status.onToggleEnabled = { [weak self] on in self?.setEnabled(on) }
         status.onCalibrate = { [weak self] edge in self?.calibrate(edge) }
         status.onReload = { [weak self] in self?.reloadConfig() }
@@ -62,7 +66,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         sensor.onStatus = { [weak self] text in
-            DispatchQueue.main.async { self?.status.setSensorStatus(text) }
+            DispatchQueue.main.async { self?.status?.setSensorStatus(text) }
         }
 
         if config.enabled {
