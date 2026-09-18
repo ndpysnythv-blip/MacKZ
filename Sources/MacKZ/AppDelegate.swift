@@ -67,6 +67,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settings.onSimulateOpen = { [weak self] in
             self?.engine.playSingle(to: 0.0, duration: 2.2, replayIfFinished: true)
         }
+        settings.onSetSleepDisabled = { [weak self] disabled in self?.setSleepDisabled(disabled) }
         settings.statusProvider = { [weak self] in
             guard let self else { return (angle: "--", phase: "--", capture: "未知") }
             let angle = self.engine.lastAngleDeg.map { String(format: "%.1f°", $0) } ?? "--"
@@ -192,6 +193,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         _ = LidAngleSensor.probe()
         notify("探针报告已生成", "已保存并打开：\(LidAngleSensor.reportURL.path)")
         NSWorkspace.shared.activateFileViewerSelecting([LidAngleSensor.reportURL])
+    }
+
+    // MARK: - 合盖休眠
+
+    /// 设置「合盖不休眠」：让开盖时不再因为休眠弹锁屏，折叠动画才看得到。
+    /// 需要管理员授权（会弹出系统密码框），完成后回写设置面板的状态显示。
+    private func setSleepDisabled(_ disabled: Bool) {
+        PowerControl.setSleepDisabled(disabled) { [weak self] result in
+            guard let self else { return }
+            self.settings?.refreshSleepState()
+            switch result {
+            case .success:
+                self.notify(disabled ? "已开启「合盖不休眠」" : "已恢复「合盖即休眠」", disabled
+                    ? """
+                    合盖后系统会继续运行（显示器仍然会关闭），开盖时不会再因为休眠而要求解锁，
+                    折叠动画就能正常播出来了。
+
+                    注意：合盖状态下机器仍在耗电、不散热，放进包里前请点「恢复系统默认（合盖即休眠）」。
+
+                    如果开盖后仍然要求输入密码，那不是休眠造成的，而是「锁定屏幕」策略：
+                    点「打开「锁定屏幕」设置」，把「关闭显示器后需要密码」改成「永不」。
+                    """
+                    : "已恢复系统默认：合盖后正常休眠。")
+            case .failure(let message):
+                self.notify("设置失败", """
+                \(message)
+
+                也可以手动打开「终端」执行下面这条命令（需要输入开机密码）：
+
+                    sudo pmset -a disablesleep \(disabled ? 1 : 0)
+                """)
+            }
+        }
     }
 
     // MARK: - 更新

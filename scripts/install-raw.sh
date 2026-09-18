@@ -72,6 +72,7 @@ FILES=(
   "Sources/MacKZ/LidAngleSensor.swift"
   "Sources/MacKZ/MetalFoldView.swift"
   "Sources/MacKZ/OverlayController.swift"
+  "Sources/MacKZ/PowerControl.swift"
   "Sources/MacKZ/ScreenCaptureStream.swift"
   "Sources/MacKZ/SettingsWindow.swift"
   "Sources/MacKZ/StatusBarController.swift"

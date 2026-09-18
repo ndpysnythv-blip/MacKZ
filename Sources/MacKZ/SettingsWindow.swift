@@ -29,6 +29,8 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     var onSimulateClose: (() -> Void)?
     /// 模拟打开：播放一次 1 → 0 的展开动画
     var onSimulateOpen: (() -> Void)?
+    /// 设置「合盖不休眠」：true = 开启（合盖继续运行），false = 恢复系统默认
+    var onSetSleepDisabled: ((Bool) -> Void)?
     /// 实时状态拉取：角度 / 阶段 / 屏幕录制权限
     var statusProvider: (() -> (angle: String, phase: String, capture: String))?
 
@@ -42,6 +44,8 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     /// 手动预览滑块与数值标签（复位时要同步刷新）
     private var manualSlider: NSSlider?
     private var manualValueLabel: NSTextField?
+    /// 合盖休眠状态显示
+    private var sleepLabel: NSTextField?
     private var timer: Timer?
     /// NSControl.target 是弱引用，这里强引用住所有回调持有者，防止被释放
     private var handlers: [NSObject] = []
@@ -57,6 +61,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     func show() {
         if window == nil { window = makeWindow() }
         refreshStatus()
+        refreshSleepState()
         window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         startTimer()
@@ -147,6 +152,27 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         handlers.append(checkHandler)
         enabledCheck = check
         stack.addArrangedSubview(sectionBox(title: "总开关", rows: [check]))
+
+        // ---------- 合盖与休眠 ----------
+        let sleepState = NSTextField(labelWithString: "读取中…")
+        sleepState.font = .systemFont(ofSize: 12)
+        sleepLabel = sleepState
+        let sleepTip = NSTextField(wrappingLabelWithString:
+            "合盖后系统默认立刻休眠，开盖要输密码，折叠动画会发生在锁屏之下——等于白做。\n"
+            + "点「开启合盖不休眠」后系统合盖仍继续运行（显示器照常关闭），开盖不会因休眠弹锁屏，动画即可正常播放。"
+            + "该设置是系统级的，需要一次性管理员授权。\n"
+            + "注意：合盖后机器仍在耗电发热，放进包里请点「恢复系统默认」。"
+            + "若开盖仍要求输密码，那是「锁定屏幕」的策略，点第三个按钮把「关闭显示器后需要密码」改为「永不」。")
+        sleepTip.font = .systemFont(ofSize: 11)
+        sleepTip.textColor = .tertiaryLabelColor
+        sleepTip.preferredMaxLayoutWidth = 520
+        stack.addArrangedSubview(sectionBox(title: "合盖与休眠（让开合动画不被锁屏吞掉）", rows: [
+            makeRow(views: [sleepState]),
+            makeRow(views: [makeButton("开启合盖不休眠", #selector(enableSleepDisabled)),
+                            makeButton("恢复系统默认（合盖即休眠）", #selector(disableSleepDisabled)),
+                            makeButton("打开「锁定屏幕」设置", #selector(openLockScreenSettings))]),
+            sleepTip
+        ]))
 
         // ---------- 智能逻辑 ----------
         stack.addArrangedSubview(sectionBox(title: "智能逻辑（停顿判定 / 加速补完）", rows: [
@@ -503,6 +529,17 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             self?.manualSlider?.doubleValue = value
             self?.manualValueLabel?.stringValue = text
         }
+    }
+
+    @objc private func enableSleepDisabled() { onSetSleepDisabled?(true) }
+    @objc private func disableSleepDisabled() { onSetSleepDisabled?(false) }
+    @objc private func openLockScreenSettings() { PowerControl.openLockScreenSettings() }
+
+    /// 刷新「合盖不休眠」当前的实际系统状态（读 pmset，开销很小，只在需要时调用）
+    func refreshSleepState() {
+        let disabled = PowerControl.isSleepDisabled
+        sleepLabel?.stringValue = "当前状态：合盖" + (disabled ? "不休眠（系统持续运行）" : "即休眠（开盖需解锁）")
+        sleepLabel?.textColor = disabled ? .systemGreen : .secondaryLabelColor
     }
 
     private func flashStatus(_ text: String) {
