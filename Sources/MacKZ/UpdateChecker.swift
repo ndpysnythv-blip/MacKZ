@@ -1,37 +1,43 @@
 import AppKit
 
 /// 更新检查与自更新。
-/// 数据源：GitHub Releases API（公开仓库，无需 token）。
-/// 自更新流程（非 App Store 应用的标准做法，与 Sparkle 思路一致）：
-///   下载 zip → 落盘到 Application Support → 生成替换脚本 → 退出自身 → 脚本解压覆盖 → 重新启动。
+/// 数据源：GitHub Releases（公开仓库，无需 token）。
+/// 自更新流程：下载 zip → 落盘到 Application Support → 生成替换脚本 → 退出自身 → 脚本解压覆盖并重启。
+///
+/// 网络说明：GitHub 的 release 资源域名在部分网络环境下不稳定，
+/// 因此这里做了「超时放宽 + 等待网络 + 失败自动重试 3 次 + 详细错误上报」。
 enum UpdateChecker {
 
-    /// 仓库标识（owner/repo），发布新版本只需推送 v* 标签，CI 会自动构建 Release
+    /// 仓库标识（owner/repo）
     static let repository = "ndpysnythv-blip/MacKZ"
 
     /// 一个可用的新版本
     struct Release {
-        let version: String      // 规范化版本号，如 "1.1.0"
+        let version: String      // 规范化版本号，如 "1.3.1"
         let notes: String        // Release 说明
         let zipURL: URL          // MacKZ.zip 直链
         let pageURL: URL         // Release 页面
     }
 
     enum UpdateError: LocalizedError {
-        case badResponse
+        case badResponse(Int)
         case noAsset
         case network(String)
         case cannotWrite(String)
 
         var errorDescription: String? {
             switch self {
-            case .badResponse:          return "服务器返回异常，请稍后再试。"
-            case .noAsset:              return "该版本没有可下载的安装包。"
-            case .network(let message): return "网络请求失败：\(message)"
-            case .cannotWrite(let path):return "没有写入权限：\(path)"
+            case .badResponse(let code): return "服务器返回异常（HTTP \(code)）"
+            case .noAsset:               return "该版本没有可下载的安装包"
+            case .network(let message):  return "网络错误：\(message)"
+            case .cannotWrite(let path): return "没有写入权限：\(path)"
             }
         }
     }
+
+    /// 终端一键安装命令（下载失败时给用户兜底）
+    static let terminalInstallCommand =
+        "curl -fsSL https://raw.githubusercontent.com/ndpysnythv-blip/MacKZ/main/scripts/install-from-source.sh | bash"
 
     // MARK: - 版本信息
 
@@ -40,7 +46,7 @@ enum UpdateChecker {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.0.0"
     }
 
-    /// 版本号规范化："v1.1.0" -> [1, 1, 0]，非法片段按 0 处理
+    /// 版本号规范化："v1.3.1" → [1, 3, 1]
     private static func versionParts(_ text: String) -> [Int] {
         text.trimmingCharacters(in: CharacterSet(charactersIn: "vV "))
             .split(separator: ".")
@@ -62,15 +68,14 @@ enum UpdateChecker {
     /// 检查最新 Release；回调在主线程，`nil` 表示已是最新版本
     static func check(completion: @escaping (Result<Release?, UpdateError>) -> Void) {
         guard let url = URL(string: "https://api.github.com/repos/\(repository)/releases/latest") else {
-            completion(.failure(.badResponse))
+            completion(.failure(.badResponse(-1)))
             return
         }
         var request = URLRequest(url: url)
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
-        request.timeoutInterval = 15
+        request.timeoutInterval = 20
 
         URLSession.shared.dataTask(with: request) { data, _, error in
-            // 统一回到主线程回调，避免调用方各自 dispatch
             let finish: (Result<Release?, UpdateError>) -> Void = { result in
                 DispatchQueue.main.async { completion(result) }
             }
@@ -81,7 +86,7 @@ enum UpdateChecker {
             guard let data,
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let tag = json["tag_name"] as? String else {
-                finish(.failure(.badResponse))
+                finish(.failure(.badResponse(-1)))
                 return
             }
 
@@ -91,7 +96,6 @@ enum UpdateChecker {
             let pageURL = (json["html_url"] as? String).flatMap(URL.init(string:))
                 ?? URL(string: "https://github.com/\(repository)/releases")!
 
-            // 版本没变或更旧 → 视为已是最新
             guard isNewer(versionParts(tag), than: versionParts(currentVersion)) else {
                 finish(.success(nil))
                 return
@@ -109,10 +113,16 @@ enum UpdateChecker {
 
     // MARK: - 下载并安装
 
-    /// 下载新版本并安排替换重启；成功后调用方应主动退出 App
+    /// 保持下载器强引用（URLSession delegate 需要对象存活到任务结束）
+    private static var activeDownloader: UpdateDownloader?
+
+    /// 下载新版本并安排替换重启。
+    /// - progress: (进度 0~1，状态文本)，进度 < 0 表示不确定进度（连接中/重试中）
+    /// - completion: 成功后调用方应主动退出 App，交棒给更新脚本
     static func downloadAndInstall(_ release: Release,
+                                   progress: @escaping (Double, String) -> Void,
                                    completion: @escaping (Result<Void, UpdateError>) -> Void) {
-        // 直接跑二进制（非 .app）时无法自替换，退回让用户手动下载
+        // 直接跑二进制（非 .app）时无法自替换
         let bundlePath = Bundle.main.bundlePath
         guard bundlePath.hasSuffix(".app") else {
             DispatchQueue.main.async { completion(.failure(.cannotWrite(bundlePath))) }
@@ -125,33 +135,28 @@ enum UpdateChecker {
             DispatchQueue.main.async { completion(.failure(.cannotWrite(updateDir.path))) }
             return
         }
+        let zipPath = updateDir.appendingPathComponent("MacKZ.zip")
 
-        URLSession.shared.downloadTask(with: release.zipURL) { tempURL, _, error in
-            let finish: (Result<Void, UpdateError>) -> Void = { result in
-                DispatchQueue.main.async { completion(result) }
+        let downloader = UpdateDownloader(release: release, destination: zipPath, progress: progress) { result in
+            activeDownloader = nil
+            switch result {
+            case .failure(let error):
+                completion(.failure(error))
+            case .success:
+                do {
+                    let script = try makeInstallScript(updateDir: updateDir, zipPath: zipPath, targetApp: bundlePath)
+                    launchDetached(script)
+                    completion(.success(()))
+                } catch {
+                    completion(.failure(.cannotWrite(error.localizedDescription)))
+                }
             }
-            if let error {
-                finish(.failure(.network(error.localizedDescription)))
-                return
-            }
-            guard let tempURL else {
-                finish(.failure(.badResponse))
-                return
-            }
-            let zipPath = updateDir.appendingPathComponent("MacKZ.zip")
-            do {
-                try? FileManager.default.removeItem(at: zipPath)
-                try FileManager.default.moveItem(at: tempURL, to: zipPath)
-                let scriptPath = try makeInstallScript(updateDir: updateDir, zipPath: zipPath, targetApp: bundlePath)
-                launchDetached(scriptPath)
-                finish(.success(()))
-            } catch {
-                finish(.failure(.cannotWrite(error.localizedDescription)))
-            }
-        }.resume()
+        }
+        activeDownloader = downloader
+        downloader.start()
     }
 
-    /// 生成替换脚本：等主进程退出 → 解压 → 覆盖原 .app → 重新启动
+    /// 生成替换脚本：等主进程退出 → 解压 → 覆盖原 .app → 清 TCC 旧记录 → 重新启动
     private static func makeInstallScript(updateDir: URL, zipPath: URL, targetApp: String) throws -> URL {
         let script = """
         #!/bin/sh
@@ -202,5 +207,181 @@ enum UpdateChecker {
         process.executableURL = URL(fileURLWithPath: "/bin/sh")
         process.arguments = ["-c", "nohup /bin/sh '\(scriptURL.path)' >/dev/null 2>&1 &"]
         try? process.run()
+    }
+}
+
+// MARK: - 下载器（带进度回调与自动重试）
+
+/// 用 URLSessionDownloadDelegate 拿到下载进度；失败自动重试，避免网络抖动一次就放弃。
+private final class UpdateDownloader: NSObject, URLSessionDownloadDelegate {
+
+    private static let maxAttempts = 3
+
+    private let release: UpdateChecker.Release
+    private let destination: URL
+    private let progress: (Double, String) -> Void
+    private let completion: (Result<Void, UpdateChecker.UpdateError>) -> Void
+
+    private var session: URLSession?
+    private var attempt = 0
+    private var finished = false
+    private var movedToDestination = false
+    private var lastError: UpdateChecker.UpdateError?
+
+    init(release: UpdateChecker.Release, destination: URL,
+         progress: @escaping (Double, String) -> Void,
+         completion: @escaping (Result<Void, UpdateChecker.UpdateError>) -> Void) {
+        self.release = release
+        self.destination = destination
+        self.progress = progress
+        self.completion = completion
+    }
+
+    func start() {
+        attempt += 1
+        movedToDestination = false
+        lastError = nil
+
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = 30
+        config.timeoutIntervalForResource = 900          // 单个文件最长 15 分钟
+        config.waitsForConnectivity = true               // 网络暂时不可用时等待而不是立即失败
+        config.requestCachePolicy = .reloadIgnoringLocalCacheData
+        let session = URLSession(configuration: config, delegate: self, delegateQueue: nil)
+        self.session = session
+
+        let tip = attempt == 1 ? "正在连接 GitHub…" : "连接不稳定，正在重试（第 \(attempt)/\(Self.maxAttempts) 次）…"
+        DispatchQueue.main.async { [weak self] in self?.progress(-1, tip) }
+        session.downloadTask(with: release.zipURL).resume()
+    }
+
+    // MARK: 下载进度
+    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask,
+                    didWriteData bytesWritten: Int64, totalBytesWritten: Int64,
+                    totalBytesExpectedToWrite: Int64) {
+        guard totalBytesExpectedToWrite > 0 else { return }
+        let fraction = min(max(Double(totalBytesWritten) / Double(totalBytesExpectedToWrite), 0), 1)
+        let text = String(format: "已下载 %.0f%%（%.0f KB / %.0f KB）",
+                          fraction * 100,
+                          Double(totalBytesWritten) / 1024,
+                          Double(totalBytesExpectedToWrite) / 1024)
+        DispatchQueue.main.async { [weak self] in self?.progress(fraction, text) }
+    }
+
+    // MARK: 下载完成（临时文件在此处必须同步搬走）
+    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask,
+                    didFinishDownloadingTo location: URL) {
+        if let http = downloadTask.response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
+            lastError = .badResponse(http.statusCode)
+            return
+        }
+        do {
+            try? FileManager.default.removeItem(at: destination)
+            try FileManager.default.moveItem(at: location, to: destination)
+            movedToDestination = true
+        } catch {
+            lastError = .cannotWrite(error.localizedDescription)
+        }
+    }
+
+    // MARK: 任务结束（成功或失败）
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        session.finishTasksAndInvalidate()
+        self.session = nil
+        guard !finished else { return }
+
+        if movedToDestination {
+            finished = true
+            DispatchQueue.main.async { [weak self] in self?.completion(.success(())) }
+            return
+        }
+        if let error {
+            lastError = .network((error as NSError).localizedDescription + "（代码 \((error as NSError).code)）")
+        }
+
+        if attempt < Self.maxAttempts {
+            NSLog("[MacKZ] 下载失败（第 %d 次），1.2 秒后重试：%@",
+                  attempt, lastError?.localizedDescription ?? "未知")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in self?.start() }
+        } else {
+            finished = true
+            let finalError = lastError ?? .badResponse(-1)
+            DispatchQueue.main.async { [weak self] in self?.completion(.failure(finalError)) }
+        }
+    }
+}
+
+// MARK: - 下载进度窗口
+
+/// 更新下载进度浮窗：显示进度条与实时状态，浮在所有窗口之上。
+final class UpdateProgressWindow {
+
+    private let window: NSWindow
+    private let titleLabel = NSTextField(labelWithString: "")
+    private let detailLabel = NSTextField(labelWithString: "")
+    private let bar = NSProgressIndicator()
+
+    init() {
+        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 126),
+                          styleMask: [.titled],
+                          backing: .buffered, defer: false)
+        window.title = "MacKZ 更新"
+        window.isReleasedWhenClosed = false
+        window.level = NSWindow.Level(rawValue: 1300)      // 高于设置面板与覆盖动画层
+        window.center()
+
+        titleLabel.font = .boldSystemFont(ofSize: 13)
+        detailLabel.font = .systemFont(ofSize: 11)
+        detailLabel.textColor = .secondaryLabelColor
+        detailLabel.lineBreakMode = .byTruncatingMiddle
+
+        bar.isIndeterminate = true          // 连接阶段先转圈，拿到总大小后切成实数进度
+        bar.controlSize = .small
+        bar.translatesAutoresizingMaskIntoConstraints = false
+        bar.widthAnchor.constraint(equalToConstant: 360).isActive = true
+
+        let stack = NSStackView(views: [titleLabel, bar, detailLabel])
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 10
+        stack.edgeInsets = NSEdgeInsets(top: 18, left: 20, bottom: 18, right: 20)
+        stack.translatesAutoresizingMaskIntoConstraints = false
+
+        let container = NSView()
+        container.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            stack.topAnchor.constraint(equalTo: container.topAnchor),
+            stack.bottomAnchor.constraint(equalTo: container.bottomAnchor)
+        ])
+        window.contentView = container
+    }
+
+    func show(version: String) {
+        titleLabel.stringValue = "正在下载 MacKZ \(version)"
+        detailLabel.stringValue = "准备中…"
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    /// fraction < 0 表示不确定进度（连接中 / 重试中）
+    func update(fraction: Double, detail: String) {
+        if fraction < 0 {
+            bar.isIndeterminate = true
+            bar.startAnimation(nil)
+        } else {
+            if bar.isIndeterminate {
+                bar.stopAnimation(nil)
+                bar.isIndeterminate = false
+            }
+            bar.doubleValue = fraction
+        }
+        detailLabel.stringValue = detail
+    }
+
+    func close() {
+        bar.stopAnimation(nil)
+        window.orderOut(nil)
     }
 }

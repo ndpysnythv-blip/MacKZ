@@ -12,6 +12,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var overlay: OverlayController?
     /// 无铰链角度传感器机型是否已切换到替代触发（开盖 / 合盖事件）
     private var fallbackTriggersEnabled = false
+    /// 更新下载进度窗口
+    private var updateProgressWindow: UpdateProgressWindow?
     private var status: StatusBarController!
     private var settings: SettingsWindowController!
 
@@ -207,16 +209,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         alert.addButton(withTitle: "稍后")
         switch alert.runModal() {
         case .alertFirstButtonReturn:
-            notify("正在下载更新", "下载完成后 MacKZ 会自动退出并重启，期间屏幕可能短暂闪动。")
-            UpdateChecker.downloadAndInstall(release) { [weak self] result in
-                switch result {
-                case .success:
-                    NSApp.terminate(nil)      // 交棒给更新脚本完成替换与重启
-                case .failure(let error):
-                    self?.notify("更新失败", error.localizedDescription + "\n可到发布页手动下载。")
-                    NSWorkspace.shared.open(release.pageURL)
-                }
-            }
+            beginUpdate(release)
         case .alertSecondButtonReturn:
             NSWorkspace.shared.open(release.pageURL)
         default:
@@ -247,8 +240,54 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSLog("[MacKZ] 本机无铰链角度传感器，已切换为「开盖唤醒 / 合盖睡眠」触发模式")
     }
 
-    // MARK: - 屏幕录制权限
+    // MARK: - 更新下载
 
+    /// 下载并安装更新：显示进度窗口；成功则退出并交棒给替换脚本
+    private func beginUpdate(_ release: UpdateChecker.Release) {
+        let progressWindow = UpdateProgressWindow()
+        progressWindow.show(version: release.version)
+        updateProgressWindow = progressWindow
+
+        UpdateChecker.downloadAndInstall(release, progress: { [weak progressWindow] fraction, detail in
+            progressWindow?.update(fraction: fraction, detail: detail)
+        }, completion: { [weak self] result in
+            self?.updateProgressWindow?.close()
+            self?.updateProgressWindow = nil
+            switch result {
+            case .success:
+                NSLog("[MacKZ] 更新包下载完成，退出以便替换并重启")
+                NSApp.terminate(nil)          // 交棒给更新脚本完成替换与重启
+            case .failure(let error):
+                self?.showUpdateFailure(error, release: release)
+            }
+        })
+    }
+
+    /// 更新失败提示：给出具体错误 + 可用的兜底安装方式
+    private func showUpdateFailure(_ error: Error, release: UpdateChecker.Release) {
+        let alert = NSAlert()
+        alert.messageText = "更新下载失败"
+        alert.informativeText = """
+        \(error.localizedDescription)
+
+        GitHub 的更新资源域名在部分网络环境下不稳定。可以改用终端命令安装（走 git 拉源码，通常更容易连通）：
+        """
+        alert.addButton(withTitle: "复制终端命令")
+        alert.addButton(withTitle: "打开发布页")
+        alert.addButton(withTitle: "关闭")
+        switch alert.runModal() {
+        case .alertFirstButtonReturn:
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(UpdateChecker.terminalInstallCommand, forType: .string)
+            notify("命令已复制", "粘贴到「终端」里执行，即可安装最新版本。")
+        case .alertSecondButtonReturn:
+            NSWorkspace.shared.open(release.pageURL)
+        default:
+            break
+        }
+    }
+
+    // MARK: - 屏幕录制权限
     /// 启动自检：未授权则主动发起系统授权请求，并引导到系统设置
     private func ensureCapturePermission() {
         guard config.captureScreen else { return }
