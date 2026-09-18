@@ -23,5 +23,7 @@
   "foldAngleDeg": 90,
   "foldDirection": "down",
   "showBadge": true,
-  "autoCheckUpdate": true
+  "autoCheckUpdate": true,
+  "remoteControl": true,
+  "remoteControlPort": 52800
 }

@@ -31,6 +31,8 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     var onSimulateOpen: (() -> Void)?
     /// 设置「合盖不休眠」：true = 开启（合盖继续运行），false = 恢复系统默认
     var onSetSleepDisabled: ((Bool) -> Void)?
+    /// 手机遥控信息：是否启用、访问地址、运行状态
+    var remoteInfoProvider: (() -> (enabled: Bool, url: String, status: String))?
     /// 实时状态拉取：角度 / 阶段 / 屏幕录制权限
     var statusProvider: (() -> (angle: String, phase: String, capture: String))?
 
@@ -46,6 +48,8 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     private var manualValueLabel: NSTextField?
     /// 合盖休眠状态显示
     private var sleepLabel: NSTextField?
+    /// 手机遥控地址显示
+    private var remoteLabel: NSTextField?
     private var timer: Timer?
     /// NSControl.target 是弱引用，这里强引用住所有回调持有者，防止被释放
     private var handlers: [NSObject] = []
@@ -62,6 +66,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         if window == nil { window = makeWindow() }
         refreshStatus()
         refreshSleepState()
+        refreshRemoteInfo()
         window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         startTimer()
@@ -117,7 +122,9 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         return win
     }
 
-    /// 组装所有设置分区
+    /// 组装所有设置分区。
+    /// 排布原则：新手只需要最上面几块（总开关/权限/手机遥控/常用），
+    /// 角度标定、采集性能、智能逻辑等细节全部收进可折叠的「高级设置」。
     private func buildSections(into stack: NSStackView) {
 
         // ---------- 实时状态 ----------
@@ -127,22 +134,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         statusLabel = status
         stack.addArrangedSubview(sectionBox(title: "实时状态", rows: [status]))
 
-        // ---------- 权限 ----------
-        let capture = NSTextField(labelWithString: "检测中…")
-        capture.font = .systemFont(ofSize: 12)
-        captureLabel = capture
-        let requestButton = makeButton("申请授权", #selector(requestCapture))
-        let repairButton = makeButton("修复权限", #selector(repairCapture))
-        let openButton = makeButton("打开系统设置", #selector(openPrivacySettings))
-        let permissionRow = makeRow(views: [capture, requestButton, repairButton, openButton])
-        let tip = NSTextField(wrappingLabelWithString:
-            "实时桌面重投影需要「屏幕录制」权限。首次授权后必须退出并重新启动 MacKZ 才会生效。\n若设置里已勾选却仍显示未授权（更新后常见），点「修复权限」清除过期记录后重新授权。")
-        tip.font = .systemFont(ofSize: 11)
-        tip.textColor = .tertiaryLabelColor
-        tip.preferredMaxLayoutWidth = 520
-        stack.addArrangedSubview(sectionBox(title: "权限", rows: [permissionRow, tip]))
-
-        // ---------- 总开关 ----------
+        // ---------- 总开关（最常用，放最前） ----------
         let check = NSButton(checkboxWithTitle: "启用 MacKZ（全局折叠动画）", target: nil, action: nil)
         check.state = config.enabled ? .on : .off
         check.font = .systemFont(ofSize: 13, weight: .medium)
@@ -152,6 +144,87 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         handlers.append(checkHandler)
         enabledCheck = check
         stack.addArrangedSubview(sectionBox(title: "总开关", rows: [check]))
+
+        // ---------- 权限 ----------
+        let capture = NSTextField(labelWithString: "检测中…")
+        capture.font = .systemFont(ofSize: 12)
+        captureLabel = capture
+        let permissionRow = makeRow(views: [capture,
+                                            makeButton("申请授权", #selector(requestCapture)),
+                                            makeButton("修复权限", #selector(repairCapture)),
+                                            makeButton("打开系统设置", #selector(openPrivacySettings))])
+        let tip = NSTextField(wrappingLabelWithString:
+            "实时桌面重投影需要「屏幕录制」权限，首次授权后必须重启 MacKZ 才生效。\n若设置里已勾选却仍显示未授权（更新后常见），点「修复权限」清除过期记录后重新授权。")
+        tip.font = .systemFont(ofSize: 11)
+        tip.textColor = .tertiaryLabelColor
+        tip.preferredMaxLayoutWidth = 520
+        stack.addArrangedSubview(sectionBox(title: "权限", rows: [permissionRow, tip]))
+
+        // ---------- 手机遥控（演示用） ----------
+        let remoteState = NSTextField(labelWithString: "读取中…")
+        remoteState.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
+        remoteState.lineBreakMode = .byTruncatingMiddle
+        remoteLabel = remoteState
+        let remoteTip = NSTextField(wrappingLabelWithString:
+            "手机与 Mac 连同一个 Wi-Fi，用手机浏览器打开上面的地址，即可远程控制折叠动画（合上 / 打开 / 播放一次 / 拖动进度），适合演示给别人看。\n"
+            + "地址中的 t=xxxx 是本次随机生成的访问口令，只在局域网内有效，重启插件后会重新生成。")
+        remoteTip.font = .systemFont(ofSize: 11)
+        remoteTip.textColor = .tertiaryLabelColor
+        remoteTip.preferredMaxLayoutWidth = 520
+        stack.addArrangedSubview(sectionBox(title: "手机遥控（演示用）", rows: [
+            makeRow(views: [remoteState]),
+            makeRow(views: [makeButton("复制链接", #selector(copyRemoteURL)),
+                            makeButton("在本机打开", #selector(openRemoteURL)),
+                            makeButton("刷新地址", #selector(refreshRemoteURL))]),
+            switchRow("启用手机遥控", \.remoteControl),
+            remoteTip
+        ]))
+
+        // ---------- 常用（只放新手真正会调的几项） ----------
+        let progressSlider = NSSlider(value: 0, minValue: 0, maxValue: 1, target: nil, action: nil)
+        progressSlider.isContinuous = true
+        progressSlider.translatesAutoresizingMaskIntoConstraints = false
+        progressSlider.widthAnchor.constraint(equalToConstant: 250).isActive = true
+        let progressValue = NSTextField(labelWithString: "0%")
+        progressValue.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
+        progressValue.textColor = .secondaryLabelColor
+        progressValue.alignment = .right
+        progressValue.translatesAutoresizingMaskIntoConstraints = false
+        progressValue.widthAnchor.constraint(equalToConstant: 76).isActive = true
+        manualSlider = progressSlider
+        manualValueLabel = progressValue
+        let progressHandler = SliderHandler { [weak self] v in
+            self?.onManualProgress?(v)
+            progressValue.stringValue = "\(Int(v * 100 + 0.5))%"
+        }
+        handlers.append(progressHandler)
+        progressSlider.target = progressHandler
+        progressSlider.action = #selector(SliderHandler.fire(_:))
+
+        let commonTip = NSTextField(wrappingLabelWithString:
+            "① 折叠方向：决定画面是往屏幕下方还是上方收；② 开始折叠角：铰链角度低于它才出现动画（默认 90°）；"
+            + "③ 视觉风格：磨砂玻璃观感；④ 下面的滑块与按钮可随时预览动画（不依赖铰链传感器）。")
+        commonTip.font = .systemFont(ofSize: 11)
+        commonTip.textColor = .tertiaryLabelColor
+        commonTip.preferredMaxLayoutWidth = 520
+        stack.addArrangedSubview(sectionBox(title: "常用设置", rows: [
+            popupRow("折叠方向", \.foldDirection, options: [
+                ("down", "向下收（内容折向屏幕下方，推荐）"),
+                ("up", "向上收（参考实现原始方向）")
+            ]),
+            sliderRow("开始折叠角", \.triggerAngleDeg, 0...180, decimals: 1, suffix: "°"),
+            popupRow("视觉风格", \.visualStyle, options: [
+                ("clear", "Clear · 轻模糊"),
+                ("frosted", "Frosted · 磨砂玻璃（默认）"),
+                ("cinematic", "Cinematic · 深模糊 + 棱镜色散")
+            ]),
+            makeRow(title: "手动预览", views: [progressSlider, progressValue]),
+            makeRow(views: [makeButton("模拟合上", #selector(simulateClose)),
+                            makeButton("模拟打开", #selector(simulateOpen)),
+                            makeButton("播放一次开合", #selector(demo)),
+                            makeButton("复位（完全展开）", #selector(resetManual))]),
+            commonTip
+        ]))
 
         // ---------- 合盖与休眠 ----------
         let sleepState = NSTextField(labelWithString: "读取中…")
@@ -174,106 +247,46 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             sleepTip
         ]))
 
-        // ---------- 智能逻辑 ----------
-        stack.addArrangedSubview(sectionBox(title: "智能逻辑（停顿判定 / 加速补完）", rows: [
+        // ---------- 高级设置（默认收起） ----------
+        stack.addArrangedSubview(collapsibleBox(title: "高级设置", rows: [
+            NSTextField(labelWithString: "角度标定"),
+            sliderRow("完全合上角", \.closeAngleDeg, 0...180, decimals: 1, suffix: "°"),
+            switchRow("反转传感器方向", \.invertAngle),
+            switchRow("显示进度角标", \.showBadge),
+            NSTextField(labelWithString: "智能逻辑（停顿判定 / 加速补完）"),
             intSliderRow("停顿判定时长", \.stallDurationMs, 80...2000, suffix: " ms"),
             sliderRow("加速倍率", \.catchUpSpeed, 1...10, decimals: 1, suffix: "×"),
             sliderRow("片段基准时长", \.clipDuration, 0.15...2.0, decimals: 2, suffix: " s"),
             intSliderRow("补完最短时长", \.minCatchUpMs, 0...600, suffix: " ms"),
             sliderRow("有效移动阈值", \.angleEpsilon, 0.1...5, decimals: 2, suffix: "°"),
-            sliderRow("端点防抖阈值", \.rearmProgress, 0.01...0.4, decimals: 2, suffix: "")
-        ]))
-
-        // ---------- 角度标定 ----------
-        stack.addArrangedSubview(sectionBox(title: "角度标定（进度 = (开始折叠角 − 角度) ÷ 区间）", rows: [
-            sliderRow("开始折叠角", \.triggerAngleDeg, 0...180, decimals: 1, suffix: "°"),
-            sliderRow("完全合上角", \.closeAngleDeg, 0...180, decimals: 1, suffix: "°"),
-            switchRow("反转传感器方向", \.invertAngle),
-            switchRow("显示进度角标", \.showBadge)
-        ]))
-
-        // ---------- 视觉 ----------
-        stack.addArrangedSubview(sectionBox(title: "Duo Continuity 视觉效果", rows: [
-            popupRow("视觉风格", \.visualStyle, options: [
-                ("clear", "Clear · 轻模糊"),
-                ("frosted", "Frosted · 磨砂玻璃（默认）"),
-                ("cinematic", "Cinematic · 深模糊 + 棱镜色散")
-            ]),
+            sliderRow("端点防抖阈值", \.rearmProgress, 0.01...0.4, decimals: 2, suffix: ""),
+            NSTextField(labelWithString: "视觉细节"),
             popupRow("视点", \.viewpoint, options: [
                 ("desk", "俯看（笔记本放在桌面上）"),
                 ("front", "平视（支架抬升 / 外接屏）")
             ]),
             sliderRow("玻璃最大立起角", \.foldAngleDeg, 30...90, decimals: 0, suffix: "°"),
-            popupRow("折叠方向", \.foldDirection, options: [
-                ("down", "向下收（内容折向屏幕下方，推荐）"),
-                ("up", "向上收（参考实现原始方向）")
-            ]),
             sliderRow("覆盖层不透明度", \.overlayAlpha, 0.1...1.0, decimals: 2, suffix: ""),
-            intSliderRow("覆盖窗口层级", \.overlayLevel, 10...2000, suffix: "")
-        ]))
-
-        // ---------- 采集与性能 ----------
-        stack.addArrangedSubview(sectionBox(title: "采集与性能", rows: [
+            intSliderRow("覆盖窗口层级", \.overlayLevel, 10...2000, suffix: ""),
+            NSTextField(labelWithString: "采集与性能"),
             switchRow("实时抓屏（需屏幕录制权限）", \.captureScreen),
             switchRow("空闲时停止采集（省电）", \.captureIdleStop),
             intSliderRow("采集帧率", \.captureFPS, 15...120, suffix: " fps"),
             sliderRow("渲染分辨率比例", \.renderScale, 0.4...1.0, decimals: 2, suffix: ""),
             sliderRow("传感器采样率", \.sampleHz, 10...120, decimals: 0, suffix: " Hz"),
             sliderRow("角度平滑系数", \.smoothing, 0...0.95, decimals: 2, suffix: ""),
-            switchRow("禁止被录屏/共享捕获", \.excludedFromCapture)
-        ]))
-
-        // ---------- 手动预览（没有铰链传感器的机型也能体验动画） ----------
-        let progressSlider = NSSlider(value: 0, minValue: 0, maxValue: 1, target: nil, action: nil)
-        progressSlider.isContinuous = true
-        progressSlider.translatesAutoresizingMaskIntoConstraints = false
-        progressSlider.widthAnchor.constraint(equalToConstant: 250).isActive = true
-        let progressValue = NSTextField(labelWithString: "0%")
-        progressValue.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
-        progressValue.textColor = .secondaryLabelColor
-        progressValue.alignment = .right
-        progressValue.translatesAutoresizingMaskIntoConstraints = false
-        progressValue.widthAnchor.constraint(equalToConstant: 76).isActive = true
-        manualSlider = progressSlider
-        manualValueLabel = progressValue
-
-        let progressHandler = SliderHandler { [weak self] v in
-            self?.onManualProgress?(v)
-            progressValue.stringValue = "\(Int(v * 100 + 0.5))%"
-        }
-        handlers.append(progressHandler)
-        progressSlider.target = progressHandler
-        progressSlider.action = #selector(SliderHandler.fire(_:))
-
-        let manualTip = NSTextField(wrappingLabelWithString:
-            "拖动滑块即可实时预览 Duo Continuity 折叠效果：0% = 完全展开（正常画面），100% = 完全折上。\n「模拟合上 / 模拟打开」会播放完整动画（没有铰链传感器的机型也能体验）。")
-        manualTip.font = .systemFont(ofSize: 11)
-        manualTip.textColor = .tertiaryLabelColor
-        manualTip.preferredMaxLayoutWidth = 520
-
-        stack.addArrangedSubview(sectionBox(title: "手动预览（没有铰链传感器的机型也能体验）", rows: [
-            makeRow(title: "折叠进度", views: [progressSlider, progressValue]),
-            manualTip,
-            makeRow(views: [makeButton("模拟合上", #selector(simulateClose)),
-                            makeButton("模拟打开", #selector(simulateOpen)),
-                            makeButton("播放一次开合", #selector(demo)),
-                            makeButton("复位（完全展开）", #selector(resetManual))])
-        ]))
-
-        // ---------- 更新 ----------
-        stack.addArrangedSubview(sectionBox(title: "更新（来自 GitHub Releases）", rows: [
+            switchRow("禁止被录屏/共享捕获", \.excludedFromCapture),
+            intSliderRow("手机遥控端口", \.remoteControlPort, 1024...65535, suffix: ""),
             switchRow("启动时自动检查更新", \.autoCheckUpdate)
         ]))
 
         // ---------- 操作按钮 ----------
-        let resetButton = makeButton("恢复默认", #selector(resetDefaults))
-        let reloadButton = makeButton("放弃修改并重载", #selector(reloadFromDisk))
-        let probeButton = makeButton("传感器探针", #selector(probe))
-        let demoButton = makeButton("预览动画", #selector(demo))
-        let updateButton = makeButton("检查更新", #selector(checkUpdate))
-        let applyButton = makeButton("保存并应用", #selector(apply), emphasized: true)
-        stack.addArrangedSubview(sectionBox(title: "操作（当前版本 \(UpdateChecker.currentVersion)）", rows: [
-            makeRow(views: [resetButton, reloadButton, probeButton, demoButton, updateButton, applyButton])
+        stack.addArrangedSubview(sectionBox(title: "操作（当前版本 \(UpdateChecker.currentVersion) · 作者 KDXZHX）", rows: [
+            makeRow(views: [makeButton("恢复默认", #selector(resetDefaults)),
+                            makeButton("放弃修改并重载", #selector(reloadFromDisk)),
+                            makeButton("传感器探针", #selector(probe)),
+                            makeButton("检查更新", #selector(checkUpdate)),
+                            makeButton("保存并应用", #selector(apply), emphasized: true)])
         ]))
     }
 
@@ -289,7 +302,30 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 7
-        stack.edgeInsets = NSEdgeInsets(top: 12, left: 14, bottom: 12, right: 14)
+        return decoratedBox(stack)
+    }
+
+    /// 可折叠分区：默认收起，点标题展开。
+    /// 目的是让新手只面对上面的常用项，细节参数不去干扰他。
+    private func collapsibleBox(title: String, rows: [NSView]) -> NSView {
+        let content = NSStackView(views: rows)
+        content.orientation = .vertical
+        content.alignment = .leading
+        content.spacing = 7
+
+        let disclosure = DisclosureHandler(title: title, content: content)
+        handlers.append(disclosure)
+
+        let inner = NSStackView(views: [disclosure.button, content])
+        inner.orientation = .vertical
+        inner.alignment = .leading
+        inner.spacing = 10
+        return decoratedBox(inner)
+    }
+
+    /// 统一的圆角背景容器
+    private func decoratedBox(_ inner: NSStackView) -> NSView {
+        inner.edgeInsets = NSEdgeInsets(top: 12, left: 14, bottom: 12, right: 14)
 
         let box = NSView()
         box.wantsLayer = true
@@ -298,13 +334,13 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         box.layer?.borderWidth = 1
         box.layer?.borderColor = NSColor.separatorColor.withAlphaComponent(0.6).cgColor
         box.translatesAutoresizingMaskIntoConstraints = false
-        box.addSubview(stack)
-        stack.translatesAutoresizingMaskIntoConstraints = false
+        box.addSubview(inner)
+        inner.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: box.leadingAnchor),
-            stack.trailingAnchor.constraint(equalTo: box.trailingAnchor),
-            stack.topAnchor.constraint(equalTo: box.topAnchor),
-            stack.bottomAnchor.constraint(equalTo: box.bottomAnchor)
+            inner.leadingAnchor.constraint(equalTo: box.leadingAnchor),
+            inner.trailingAnchor.constraint(equalTo: box.trailingAnchor),
+            inner.topAnchor.constraint(equalTo: box.topAnchor),
+            inner.bottomAnchor.constraint(equalTo: box.bottomAnchor)
         ])
         return box
     }
@@ -455,6 +491,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         statusLabel?.stringValue = "铰链角度 \(s.angle)   ·   状态机 \(s.phase)   ·   渲染 \(s.capture)"
         captureLabel?.stringValue = "屏幕录制权限：\(s.capture)"
         captureLabel?.textColor = s.capture == "已授权" ? .systemGreen : .systemOrange
+        refreshRemoteInfo()          // 手机遥控地址/状态跟着一起刷新
     }
 
     func windowWillClose(_ notification: Notification) {
@@ -535,6 +572,35 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     @objc private func disableSleepDisabled() { onSetSleepDisabled?(false) }
     @objc private func openLockScreenSettings() { PowerControl.openLockScreenSettings() }
 
+    /// 刷新手机遥控地址与状态
+    func refreshRemoteInfo() {
+        guard let info = remoteInfoProvider?() else { return }
+        if !info.enabled {
+            remoteLabel?.stringValue = "手机遥控：已关闭"
+            remoteLabel?.textColor = .secondaryLabelColor
+        } else if info.url.isEmpty {
+            remoteLabel?.stringValue = "手机遥控：\(info.status)"
+            remoteLabel?.textColor = .systemOrange
+        } else {
+            remoteLabel?.stringValue = "手机遥控：\(info.url)"
+            remoteLabel?.textColor = .systemGreen
+        }
+    }
+
+    @objc private func copyRemoteURL() {
+        guard let url = remoteInfoProvider?().url, !url.isEmpty else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(url, forType: .string)
+        flashStatus("手机遥控地址已复制：\(url)")
+    }
+
+    @objc private func openRemoteURL() {
+        guard let text = remoteInfoProvider?().url, let url = URL(string: text) else { return }
+        NSWorkspace.shared.open(url)
+    }
+
+    @objc private func refreshRemoteURL() { refreshRemoteInfo() }
+
     /// 刷新「合盖不休眠」当前的实际系统状态（读 pmset，开销很小，只在需要时调用）
     func refreshSleepState() {
         let disabled = PowerControl.isSleepDisabled
@@ -573,4 +639,28 @@ private final class PopupHandler: NSObject {
     private let action: (String) -> Void
     init(_ action: @escaping (String) -> Void) { self.action = action }
     @objc func fire(_ sender: NSPopUpButton) { action(sender.titleOfSelectedItem ?? "") }
+}
+
+/// 折叠分区开关：点标题展开/收起内容，标题箭头同步变化
+private final class DisclosureHandler: NSObject {
+    let button: NSButton
+    private let title: String
+    private let content: NSView
+
+    init(title: String, content: NSView) {
+        self.title = title
+        self.content = content
+        self.button = NSButton(title: "▸ \(title)（点开查看）", target: nil, action: nil)
+        super.init()
+        button.bezelStyle = .rounded
+        button.font = .systemFont(ofSize: 12, weight: .semibold)
+        button.target = self
+        button.action = #selector(toggle)
+        content.isHidden = true          // 默认收起
+    }
+
+    @objc private func toggle() {
+        content.isHidden.toggle()
+        button.title = content.isHidden ? "▸ \(title)（点开查看）" : "▾ \(title)"
+    }
 }

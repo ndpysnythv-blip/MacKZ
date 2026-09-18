@@ -60,6 +60,10 @@ struct Config: Codable {
     var foldDirection = "down"
     /// 是否显示进度角标
     var showBadge = true
+    /// 手机遥控（演示用）：在局域网内开一个极简 HTTP 服务，手机浏览器可控制动画
+    var remoteControl = true
+    /// 手机遥控端口
+    var remoteControlPort = 52800
     /// 启动后自动检查更新（发现新版本才提示，平时完全静默）
     var autoCheckUpdate = true
 

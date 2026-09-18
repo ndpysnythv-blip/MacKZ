@@ -64,6 +64,7 @@ RAW_BASES=(
 FILES=(
   "build.sh"
   "Resources/Info.plist"
+  "Resources/logo.jpg"
   "Sources/MacKZ/main.swift"
   "Sources/MacKZ/AppDelegate.swift"
   "Sources/MacKZ/Config.swift"
@@ -73,6 +74,7 @@ FILES=(
   "Sources/MacKZ/MetalFoldView.swift"
   "Sources/MacKZ/OverlayController.swift"
   "Sources/MacKZ/PowerControl.swift"
+  "Sources/MacKZ/RemoteControl.swift"
   "Sources/MacKZ/ScreenCaptureStream.swift"
   "Sources/MacKZ/SettingsWindow.swift"
   "Sources/MacKZ/StatusBarController.swift"
@@ -229,7 +231,7 @@ open "${APP_DST}"
 cat <<'TIP'
 
 安装完成
-  1) 菜单栏出现 KZ 图标，点「设置…」可调所有参数；
+  1) 菜单栏出现 MacKZ logo 图标，点「设置…」可调所有参数；
   2) 折叠动画需要「屏幕录制」权限：菜单栏 →「授权屏幕录制」，授权后按提示重启生效；
   3) 没有铰链角度传感器的机型，用设置面板的「手动预览」滑块体验动画；
   4) 更新：菜单栏 →「检查更新…」，或重新执行本命令；

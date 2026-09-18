@@ -44,11 +44,33 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         NSLog("[MacKZ] 菜单栏图标已就绪")
     }
 
+    /// 菜单栏图标：优先使用随包分发的 logo（作者 KDXZHX），取不到再回退到代码绘制的「KZ」字样，
+    /// 保证任何情况下图标都不会变成空白。
+    static func makeMenuBarIcon() -> NSImage {
+        let size = NSSize(width: 18, height: 18)
+        return logoIcon(size: size) ?? drawnIcon(size: size)
+    }
+
+    /// 从 App 包内加载 logo 并缩放为菜单栏尺寸。
+    /// 不设 isTemplate：logo 本身有配色，转成模板会只剩一个黑色轮廓，看不出是 logo。
+    private static func logoIcon(size: NSSize) -> NSImage? {
+        let urls = ["jpg", "png"].compactMap { Bundle.main.url(forResource: "logo", withExtension: $0) }
+        guard let url = urls.first, let source = NSImage(contentsOf: url) else { return nil }
+
+        let image = NSImage(size: size)
+        image.lockFocus()
+        let rect = NSRect(origin: .zero, size: size)
+        // 圆角裁切：方形 logo 直接进菜单栏会显得很硬
+        NSBezierPath(roundedRect: rect, xRadius: 4, yRadius: 4).addClip()
+        source.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1.0)
+        image.unlockFocus()
+        return image
+    }
+
     /// 用代码绘制菜单栏图标（KZ 字样）。
     /// 不依赖 SF Symbols：符号名在不同系统版本/机型上可能取不到，会得到一个空白图标而“看不见”。
     /// 设为 template 后由系统自动适配浅色/深色菜单栏。
-    static func makeMenuBarIcon() -> NSImage {
-        let size = NSSize(width: 18, height: 18)
+    private static func drawnIcon(size: NSSize) -> NSImage {
         let image = NSImage(size: size)
         image.lockFocus()
         let text = "KZ" as NSString

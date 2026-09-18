@@ -1,5 +1,7 @@
 # MacKZ —— MacBook 铰链开合全局动画插件
 
+> 作者 **KDXZHX** · 官网页面 <https://kdxzhx.top/mackz.html> · 当前版本 **v1.7.0**
+
 把 MacBook 屏幕铰链的开合角度当作“动画进度条”，在**任意界面、任意 App（含全屏）之上**渲染一段折叠屏开合动画。
 动画默认与铰链角度 **1:1 实时同步**；中途停手会自动加速播完剩余片段并切回正常画面。
 
@@ -10,12 +12,15 @@
 ### 方式一：源码一键安装（最推荐，不需要任何“信任”操作）
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ndpysnythv-blip/MacKZ/main/scripts/install-from-source.sh | bash
+curl -fsSL https://raw.githubusercontent.com/ndpysnythv-blip/MacKZ/main/scripts/install-raw.sh | bash
 ```
 
 本机拉源码 → 本机编译 → 装到「应用程序」→ 设置开机自启。
 产物**不带 `com.apple.quarantine` 隔离属性**，双击即可打开，系统设置里也不会出现拦截提示。
 需要 Xcode Command Line Tools，脚本会自动检测并引导安装。
+
+脚本内置抗假死策略：优先整包下载源码（1 条连接），失败再逐文件回退，并内置多个镜像；
+每个请求都带 `--max-time` 与 `--speed-limit/--speed-time`，网络假死会在 8 秒内被判超时并自动换源，不会像旧脚本那样一直卡住。
 
 ### 方式二：下载预编译版（快，但可能被 Gatekeeper 拦）
 
@@ -45,8 +50,10 @@ open /Applications/MacKZ.app
 ### 装好之后
 
 - 首次启动会自动申请「屏幕录制」权限，授权后程序自动重启让权限生效
-- 菜单栏出现笔记本图标 → 点「设置…」调参
-- 更新：菜单栏 →「检查更新…」，有新版本可一键下载替换并重启
+- 菜单栏出现 **MacKZ logo 图标** → 点「设置…」调参
+- 设置面板已按“新手优先”重排：实时状态 → 总开关 → 权限 → 手机遥控 → 常用设置，
+  角度标定 / 采集性能等细节收进底部可折叠的「高级设置」
+- 更新：菜单栏 →「检查更新…」，发现新版本会自动弹窗，可一键下载替换并重启
 
 ### 打不开时的排查顺序
 
@@ -69,9 +76,12 @@ open /Applications/MacKZ.app
 | 停顿后反向移动 → 取消加速、跟随新角度 | `cancelCatchUp` | 任何一次有效角度变化都会立刻取消加速并回到跟随模式；折到底后锁定，掀开才解除 |
 | **不要求开合到极限角度** | `finishSequence` + 平滑对齐 | 停手即从当前进度补完；进度与真实角度差过大（>0.25）时用一小段平滑追赶，避免画面瞬跳 |
 | 全局覆盖、不干扰鼠标与窗口 | `OverlayController.swift` | `ignoresMouseEvents`、不成为 key/main 窗口、高窗口层级 + `canJoinAllSpaces` |
-| **折叠视错觉（1:1 复刻 DuoHinge）** | `FoldShader.swift` + `MetalFoldView.swift` | 桌面固定在 z=0 平面，一整块「虚拟玻璃」绕屏幕**底边铰链**立起；每像素从固定视点发射线穿过玻璃、打到桌面平面求交采样 → 呈现桌面被“折倒收进铰链”。四趟 GPU 管线：投影 → 横向高斯 → 纵向高斯 → 径向色散 |
+| **折叠视错觉（1:1 复刻 DuoHinge）** | `FoldShader.swift` + `MetalFoldView.swift` | 桌面固定在 z=0 平面，一整块「虚拟玻璃」绕屏幕**顶边铰链**立起；每像素从固定视点发射线穿过玻璃、打到桌面平面求交采样 → 呈现桌面被“折倒收进屏幕下方”。四趟 GPU 管线：投影 → 横向高斯 → 纵向高斯 → 径向色散 |
+| 折叠方向可切换 | `foldDirection`（默认 `down`） | `down` = 铰链在屏幕顶边、内容向屏幕下方收（默认，符合“往下收”的直觉）；`up` = 参考实现的原始方向 |
 | 低性能消耗 | `MetalFoldView.tick` + `emit()` | 有变化才渲染、静止时 `displayLink` 暂停；进度 0 时隐藏窗口并停采集 |
 | 可启停 / 可调停顿时长与加速倍率 | 菜单栏 + `config.json` | `enabled`、`stallDurationMs`、`catchUpSpeed` 等 |
+| **手机遥控（演示用）** | `RemoteControl.swift` | Network.framework 起一个仅监听局域网的极简 HTTP 服务，手机浏览器打开设置面板显示的地址即可「合上 / 打开 / 播放一次 / 拖进度」；每次启动随机生成口令 `t=xxxx`，关闭开关即完全停止 |
+| 合盖不休眠（让动画不被锁屏吞掉） | `PowerControl.swift` | `pmset -a disablesleep 1`，经 osascript 申请一次性管理员授权 |
 
 ### 抗抖动设计（避免“必须掰到极限”的普通方案）
 - **端点锁**：某一端补完一次后锁定，进度离开端点（`rearmProgress`）才允许再次触发，避免同方向反复播放。
@@ -100,21 +110,28 @@ open /Applications/MacKZ.app
 MacKZ/
 ├── Sources/MacKZ/
 │   ├── main.swift                 入口（accessory 模式，无 Dock 图标）
-│   ├── AppDelegate.swift          装配：传感器 → 状态机 → 渲染层 + 菜单动作
+│   ├── AppDelegate.swift          装配：传感器 → 状态机 → 渲染层 + 菜单动作 + 手机遥控接线
 │   ├── Config.swift               配置模型与读写（默认值合并，兼容旧配置）
 │   ├── LidAngleSensor.swift       铰链角度读取 + 传感器探针
 │   ├── HingeAnimationEngine.swift 核心状态机（跟随 / 停顿加速 / 反向取消）
 │   ├── OverlayController.swift    全局覆盖窗口（穿透、不抢焦点、每屏一窗）
-│   ├── MetalFoldView.swift        ★ 真实渲染：CAMetalLayer + 两趟管线（模糊 / 折叠重投影）
-│   ├── FoldShader.swift           ★ Metal 着色器源码（射线投射、玻璃模糊、色散）
+│   ├── MetalFoldView.swift        ★ 真实渲染：CAMetalLayer + 四趟管线接力绘制
+│   ├── FoldShader.swift           ★ Metal 着色器源码（射线投射重投影、两趟高斯、径向色散）
 │   ├── ScreenCaptureStream.swift  ★ ScreenCaptureKit 实时抓屏 → Metal 纹理（零拷贝）
-│   └── StatusBarController.swift  菜单栏：启停 / 标定 / 重载 / 探针 / 屏幕录制授权 / 退出
-├── Resources/Info.plist           LSUIElement=true
-├── build.sh                       一键编译打包
+│   ├── SettingsWindow.swift        App 内可视化设置面板（新手优先 + 可折叠高级设置）
+│   ├── RemoteControl.swift        手机遥控：局域网极简 HTTP 服务 + 手机控制页
+│   ├── PowerControl.swift         合盖不休眠（pmset）与「锁定屏幕」设置直达
+│   ├── UpdateChecker.swift        检查 GitHub Release / 下载并交棒给替换脚本
+│   └── StatusBarController.swift   菜单栏：启停 / 标定 / 重载 / 探针 / 授权 / 更新 / 退出
+├── Resources/
+│   ├── Info.plist                 LSUIElement=true，图标 AppIcon，版权署名 KDXZHX
+│   └── logo.jpg                   作者 KDXZHX 的 logo（build.sh 自动转 AppIcon.icns，同时作菜单栏图标）
+├── build.sh                       一键编译打包（含 logo → icns 转换）
 ├── install.sh                     一键自动安装（编译→/Applications→开机自启→启动，--uninstall 卸载）
 ├── 一键安装.command                双击即可安装（Finder 直接运行）
 ├── config.sample.json             默认配置样例
-└── preview/hinge-sim.html         Duo Continuity 交互预览（支持 WebHID 真读铰链 + 一键安装按钮）
+├── scripts/install-raw.sh         低网络要求终端安装脚本（推荐）
+└── preview/hinge-sim.html         Duo Continuity 交互预览（WebGL2 四趟管线 + CPU 降级，无需 Mac 即可验证）
 ```
 
 ---
@@ -191,6 +208,9 @@ launchctl load ~/Library/LaunchAgents/com.mackz.plugin.plist
 | `renderScale` | 0.75 | 渲染分辨率比例，越低越省电（模糊会掩盖损失） |
 | `overlayAlpha` | 1.0 | 覆盖层最大不透明度 |
 | `excludedFromCapture` | false | true 时录屏/共享看不到动画 |
+| `remoteControl` | true | **手机遥控**开关：局域网 HTTP 服务，手机浏览器可远程控制动画（演示用） |
+| `remoteControlPort` | 52800 | 手机遥控监听端口 |
+| `autoCheckUpdate` | true | 启动后自动检查更新，发现新版本直接弹窗 |
 
 ---
 
@@ -284,17 +304,68 @@ cd MacKZ
 
 ## 14. App 内设置面板（推荐方式）
 
-点菜单栏图标 →「设置…」，面板分 7 个分区，改完点「保存并应用」（回车）即可热生效，无需重启：
+点菜单栏 logo 图标 →「设置…」，面板按**新手优先**排布，改完点「保存并应用」（回车）即可热生效，无需重启：
 
 | 分区 | 可以调什么 |
 | --- | --- |
 | 实时状态 | 当前铰链角度 / 状态机阶段（待机、跟随、加速补完）/ 权限状态，每 0.6s 刷新 |
-| 权限 | 一键申请授权，或跳转到系统设置页 |
-| 总开关 | 启用 / 停用整个插件 |
-| 智能逻辑 | 停顿判定时长、加速倍率、片段基准时长、补完最短时长、有效移动阈值、同向重触发阈值 |
-| 角度标定 | 完全闭合角、完全打开角、反转方向、进度角标 |
-| 视觉效果 | 折痕位置、折痕最大角度、渐进模糊、边缘色散、视距、覆盖层透明度与窗口层级 |
-| 采集与性能 | 实时抓屏开关、空闲停止采集、采集帧率、渲染分辨率比例、采样率、平滑系数、禁止被录屏捕获 |
+| 总开关 | 启用 / 停用整个插件（最常用，放在最前） |
+| 权限 | 一键申请授权、修复权限（清更新后的过期记录）、跳转系统设置页 |
+| 手机遥控（演示用） | 显示局域网访问地址 + 复制链接 / 在本机打开 / 刷新地址，以及遥控开关 |
+| 常用设置 | 折叠方向、开始折叠角、视觉风格、手动预览滑块 + 「模拟合上 / 模拟打开 / 播放一次开合 / 复位」 |
+| 合盖与休眠 | 开启合盖不休眠、恢复系统默认、直达「锁定屏幕」设置 |
+| 高级设置（默认收起） | 角度标定、智能逻辑（停顿判定 / 加速倍率 / 片段时长 / 阈值）、视觉细节（视点、玻璃最大立起角、层级）、采集与性能（抓屏、帧率、渲染比例、采样率、平滑、遥控端口、自动检查更新） |
+| 操作 | 恢复默认、放弃修改并重载、传感器探针、检查更新、保存并应用（版本号与作者 KDXZHX 也在这里） |
 
-「恢复默认」重建一份默认配置；「放弃修改并重载」丢弃当前改动、重新读盘。
+---
+
+## 15. 手机遥控（演示用）
+
+给演示场景准备的：手机连同一个 Wi-Fi，就能远程控制折叠动画，不用伸手去掰屏幕。
+
+1. 设置面板 →「手机遥控（演示用）」，确认开关是打开的，面板上会显示形如
+   `http://192.168.x.x:52800/?t=ab12cd` 的地址；
+2. 点「复制链接」，发给自己的手机（或直接在手机上照着输入）；
+3. 手机浏览器打开后是一个大字按钮页面：**合上 / 打开 / 播放一次开合 / 复位**，外加一个实时进度滑杆。
+
+细节说明：
+- 服务基于 `Network.framework`，**只监听局域网、不对外联网、不写任何文件**，关掉开关即完全停止；
+- `t=xxxx` 是每次启动随机生成的 6 位口令，只在局域网内有效，插件重启后旧链接自动失效；
+- 换端口在「高级设置 → 手机遥控端口」里改（默认 `52800`）。
+
+---
+
+## 16. 更新日志
+
+### v1.7.0
+- 新增**手机遥控**：手机浏览器远程控制折叠 / 展开动画，主要用于演示；
+- 接入作者 **KDXZHX** 的 logo：`Resources/logo.jpg` 由 `build.sh` 自动转成 `AppIcon.icns`，
+  并同时作为菜单栏图标（取不到时回退为代码绘制的 KZ 字样），`Info.plist` 版权署名同步更新；
+- 设置面板按**新手优先**重排：手机遥控 / 常用设置前置，角度标定与采集性能收进可折叠的「高级设置」；
+- 模拟动画放慢到 2.2 秒，且「模拟合上 / 模拟打开」支持反复点击；
+- 折叠方向默认「向下收」（`foldDirection = down`，铰链在屏幕顶边）；
+- 更新弹窗层级提到 2000 并加入所有空间，不再被设置面板挡住；
+- 新增「合盖不休眠」开关，解决休眠 + 锁屏把开合动画吞掉的问题；
+- 安装脚本改为抗假死版本（整包优先 + 多镜像 + 超时保护）；
+- 官网产品页上线：<https://kdxzhx.top/mackz.html>
+
+### v1.6.0
+- 四趟 Metal 管线（重投影 → 横向高斯 → 纵向高斯 → 径向色散）1:1 复刻 DuoHinge 折叠视错觉。
+
+### v1.5.x
+- 折叠方向可切换、手动预览、启动自动检查更新与弹窗提示。
+
+---
+
+## 17. 更新 · 卸载 · 反馈
+
+- **更新**：菜单栏 →「检查更新…」，发现新版本会自动弹窗，一键下载替换并重启；
+  也可以重新执行一次上面的终端安装命令。
+- **卸载**：
+
+```bash
+rm -rf /Applications/MacKZ.app ~/Library/LaunchAgents/com.mackz.plugin.plist
+```
+
+- **反馈**：<https://github.com/ndpysnythv-blip/MacKZ/issues>
 

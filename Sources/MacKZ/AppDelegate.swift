@@ -14,6 +14,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var fallbackTriggersEnabled = false
     /// 更新下载进度窗口
     private var updateProgressWindow: UpdateProgressWindow?
+    /// 手机遥控（演示用）：局域网 HTTP 服务
+    private let remote = RemoteControl()
+    private var remoteStatus = "未启动"
     private var status: StatusBarController!
     private var settings: SettingsWindowController!
 
@@ -81,6 +84,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     capture: CGPreflightScreenCaptureAccess() ? "已授权" : "未授权")
         }
 
+        // ---------- 手机遥控（演示用）----------
+        // 手机在浏览器里打开局域网地址，即可远程触发折叠动画
+        remote.onCommand = { [weak self] command in
+            guard let self else { return }
+            switch command {
+            case .close:
+                self.engine.playSingle(to: 1.0, duration: 1.2)
+            case .open:
+                self.engine.playSingle(to: 0.0, duration: 1.2)
+            case .play:
+                self.engine.playDemo()
+            case .progress(let value):
+                self.engine.setManualProgress(value)
+            }
+        }
+        remote.onStatus = { [weak self] text in
+            self?.remoteStatus = text
+            self?.settings?.refreshRemoteInfo()
+        }
+        settings.remoteInfoProvider = { [weak self] in
+            guard let self else { return (enabled: false, url: "", status: "未启动") }
+            return (enabled: self.remote.isRunning, url: self.remote.accessURL, status: self.remoteStatus)
+        }
+        // 按配置启停手机遥控
+        if config.remoteControl {
+            remote.start(port: UInt16(clamping: config.remoteControlPort))
+        }
+
         // 传感器线程 -> 主线程（30Hz 级别的派发开销可忽略）
         sensor.onAngle = { [weak self] angle in
             DispatchQueue.main.async {
@@ -114,6 +145,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         sensor.stop()
+        remote.stop()
     }
 
     // MARK: - 配置应用
@@ -131,6 +163,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             status.setSensorStatus("已停用")
         }
         status.setEnabledState(config.enabled)
+
+        // 手机遥控跟着配置热重启（开关/端口可能已改）
+        if config.remoteControl {
+            remote.start(port: UInt16(clamping: config.remoteControlPort))
+        } else {
+            remote.stop()
+            remoteStatus = "未启动"
+        }
+        settings.refreshRemoteInfo()
     }
 
     // MARK: - 菜单/面板动作
