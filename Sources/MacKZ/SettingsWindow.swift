@@ -172,8 +172,8 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         remoteState.lineBreakMode = .byTruncatingMiddle
         remoteLabel = remoteState
         let remoteTip = NSTextField(wrappingLabelWithString:
-            "推荐用法（官网配对页）\n"
-            + "① Mac 上点「打开配对页」，浏览器进入 kdxzhx.top/mackz-pair，页面上会显示大号连接码和二维码；\n"
+            "推荐用法（官网配对）\n"
+            + "① Mac 上点「打开配对页」，浏览器进入 kdxzhx.top/mackz 的「手机遥控配对」区块，页面上会显示大号连接码和二维码；\n"
             + "② 手机连同一个 Wi-Fi，扫码即可直接进入控制页；扫不了时在配对页输入框里粘贴连接码也一样；\n"
             + "③ 连接码形如 192.168.1.5:52800#836291，点「复制连接码」可以自己发到手机上。\n\n"
             + "服务只监听本机局域网端口，用纯 http（不使用证书，因此不会出现任何钥匙串授权弹窗）。\n\n"

@@ -53,11 +53,12 @@ final class RemoteControl {
         return "\(ip):\(port)#\(token)"
     }
 
-    /// 官网配对页地址。连接码放在 URL 的 `#` 片段里 —— 片段不会发往服务器，只在本机浏览器内解析。
+    /// 官网配对页地址（介绍页里的「手机遥控配对」区块）。
+    /// 连接码放在 URL 的 `#` 片段里 —— 片段不会发往服务器，只在本机浏览器内解析。
     var pairPageURL: String {
         guard !pairCode.isEmpty,
               let encoded = pairCode.addingPercentEncoding(withAllowedCharacters: .alphanumerics) else { return "" }
-        return "https://kdxzhx.top/mackz-pair#c=\(encoded)"
+        return "https://kdxzhx.top/mackz#c=\(encoded)"
     }
 
     // MARK: - 启停
