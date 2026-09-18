@@ -1,6 +1,6 @@
 import AppKit
 
-/// 菜单栏控制器：插件启停、参数热重载、角度标定、传感器探针。
+/// 菜单栏控制器：插件启停、参数热重载、角度标定、传感器探针、打开设置面板。
 final class StatusBarController: NSObject, NSMenuDelegate {
 
     enum Calibration { case closed, open }
@@ -9,6 +9,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     var onCalibrate: ((Calibration) -> Void)?
     var onReload: (() -> Void)?
     var onOpenConfig: (() -> Void)?
+    var onOpenSettings: (() -> Void)?
     var onProbe: (() -> Void)?
     var onRequestCapture: (() -> Void)?
     var onDemo: (() -> Void)?
@@ -50,16 +51,21 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         enabledItem.target = self
         enabledItem.state = enabled ? .on : .off
         menu.addItem(enabledItem)
+
+        // 「设置…」置顶常用入口，沿用 macOS 惯例快捷键 ⌘,
+        let settingsItem = makeItem("设置…", #selector(openSettings))
+        settingsItem.keyEquivalent = ","
+        menu.addItem(settingsItem)
         menu.addItem(.separator())
 
         menu.addItem(makeItem("将当前角度标定为「完全闭合」", #selector(calibrateClosed)))
         menu.addItem(makeItem("将当前角度标定为「完全打开」", #selector(calibrateOpen)))
         menu.addItem(makeItem("预览一次开合动画（验证渲染）", #selector(demo)))
         menu.addItem(.separator())
+        menu.addItem(makeItem("授权屏幕录制（Duo Continuity 画源）", #selector(requestCapture)))
         menu.addItem(makeItem("重载配置", #selector(reload)))
         menu.addItem(makeItem("打开配置文件…", #selector(openConfig)))
         menu.addItem(makeItem("传感器探针（生成诊断报告）", #selector(probe)))
-        menu.addItem(makeItem("授权屏幕录制（Duo Continuity 画源）", #selector(requestCapture)))
         menu.addItem(.separator())
         menu.addItem(makeItem("退出 MacKZ", #selector(quit)))
 
@@ -77,6 +83,12 @@ final class StatusBarController: NSObject, NSMenuDelegate {
 
     func refreshEnabled() {
         enabledItem.state = enabled ? .on : .off
+    }
+
+    /// 由外部（设置面板 / 标定流程）回写开关状态，保持菜单勾选一致
+    func setEnabledState(_ on: Bool) {
+        enabled = on
+        refreshEnabled()
     }
 
     func setSensorStatus(_ text: String) {
@@ -113,6 +125,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     @objc private func calibrateOpen() { onCalibrate?(.open) }
     @objc private func reload() { onReload?() }
     @objc private func openConfig() { onOpenConfig?() }
+    @objc private func openSettings() { onOpenSettings?() }
     @objc private func probe() { onProbe?() }
     @objc private func requestCapture() { onRequestCapture?() }
     @objc private func demo() { onDemo?() }
