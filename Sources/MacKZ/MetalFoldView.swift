@@ -24,22 +24,22 @@ final class MetalFoldView: NSView {
 
     /// 折叠进度：0 = 完全合上（折痕角最大），1 = 完全打开（无折叠，画面与真实桌面完全一致）
     var fold: Double = 1 {
-        didSet { if abs(fold - oldValue) > 0.0005 { needsFrame = true } }
+        didSet { if abs(fold - oldValue) > 0.0005 { setNeedsFrame() } }
     }
     /// 折痕位置（0=屏幕顶，1=屏幕底）
-    var creaseRatio: Double = 0.62 { didSet { needsFrame = true } }
+    var creaseRatio: Double = 0.62 { didSet { setNeedsFrame() } }
     /// 完全合上时的最大折痕角（度）
-    var maxFoldDeg: Double = 96 { didSet { needsFrame = true } }
-    var blurStrength: Double = 0.55 { didSet { needsFrame = true } }
-    var dispersion: Double = 0.35 { didSet { needsFrame = true } }
-    var eyeDistance: Double = 2.2 { didSet { needsFrame = true } }
+    var maxFoldDeg: Double = 96 { didSet { setNeedsFrame() } }
+    var blurStrength: Double = 0.55 { didSet { setNeedsFrame() } }
+    var dispersion: Double = 0.35 { didSet { setNeedsFrame() } }
+    var eyeDistance: Double = 2.2 { didSet { setNeedsFrame() } }
     /// 渲染分辨率比例（0.5~1），越低越省电，模糊本身会掩盖分辨率损失
-    var renderScale: CGFloat = 0.75 { didSet { needsFrame = true } }
+    var renderScale: CGFloat = 0.75 { didSet { setNeedsFrame() } }
     /// 整体不透明度（序列两端淡入淡出）
-    var fade: Double = 0 { didSet { if abs(fade - oldValue) > 0.002 { needsFrame = true } } }
+    var fade: Double = 0 { didSet { if abs(fade - oldValue) > 0.002 { setNeedsFrame() } } }
 
     /// 屏幕抓帧纹理（由采集线程传入，主线程赋值）
-    var sourceTexture: MTLTexture? { didSet { needsFrame = true } }
+    var sourceTexture: MTLTexture? { didSet { setNeedsFrame() } }
 
     /// 渲染失败/编译器报错回调（用于菜单提示）
     var onError: ((String) -> Void)?
@@ -146,9 +146,15 @@ final class MetalFoldView: NSView {
         let link = displayLink(target: self, selector: #selector(tick))
         link.preferredFrameRateRange = CAFrameRateRange(minimum: 30, maximum: 120, preferred: 60)
         link.add(to: .main, forMode: .common)
-        link.isPaused = true
         displayLink = link
+        setNeedsFrame()          // 关键：先跑起来，第一帧才会到来
+    }
+
+    /// 标记需要重绘；若时钟因空闲被暂停则唤醒它。
+    /// 注意：displayLink 暂停后 tick 不再触发，只置 needsFrame 而不唤醒就会永远画不出下一帧。
+    private func setNeedsFrame() {
         needsFrame = true
+        ensureRunning()
     }
 
     /// 有变化才渲染；静止时 displayLink 暂停，空闲功耗接近 0
@@ -188,7 +194,14 @@ final class MetalFoldView: NSView {
         guard let metalLayer, let foldPipeline, let blurPipeline,
               let source = sourceTexture ?? fallbackTexture,
               let drawable = metalLayer.nextDrawable() else { return }
-        let w = Int(metalLayer.drawableSize.width), h = Int(metalLayer.drawableSize.height)
+        // 尺寸可能因窗口刚挂载而尚未就绪，这里兜底重算一次
+        var w = Int(metalLayer.drawableSize.width)
+        var h = Int(metalLayer.drawableSize.height)
+        if w <= 1 || h <= 1 {
+            updateDrawableSize()
+            w = Int(metalLayer.drawableSize.width)
+            h = Int(metalLayer.drawableSize.height)
+        }
         guard w > 1, h > 1 else { return }
 
         var u = Uniforms()
