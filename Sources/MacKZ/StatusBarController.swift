@@ -12,6 +12,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     var onOpenSettings: (() -> Void)?
     var onProbe: (() -> Void)?
     var onRequestCapture: (() -> Void)?
+    var onRepairCapture: (() -> Void)?
     var onDemo: (() -> Void)?
     var onCheckUpdate: (() -> Void)?
     var onQuit: (() -> Void)?
@@ -86,6 +87,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         menu.addItem(makeItem("预览一次开合动画（验证渲染）", #selector(demo)))
         menu.addItem(.separator())
         menu.addItem(makeItem("授权屏幕录制（Duo Continuity 画源）", #selector(requestCapture)))
+        menu.addItem(makeItem("修复屏幕录制权限（更新后授权失效时用）", #selector(repairCapture)))
         menu.addItem(makeItem("重载配置", #selector(reload)))
         menu.addItem(makeItem("打开配置文件…", #selector(openConfig)))
         menu.addItem(makeItem("传感器探针（生成诊断报告）", #selector(probe)))
@@ -152,6 +154,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     @objc private func openSettings() { onOpenSettings?() }
     @objc private func probe() { onProbe?() }
     @objc private func requestCapture() { onRequestCapture?() }
+    @objc private func repairCapture() { onRepairCapture?() }
     @objc private func demo() { onDemo?() }
     @objc private func checkUpdate() { onCheckUpdate?() }
     @objc private func quit() { onQuit?() }

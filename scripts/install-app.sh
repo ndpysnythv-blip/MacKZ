@@ -59,6 +59,9 @@ fi
 echo "==> 重新做本地签名（避免解压后签名结构失效导致提示“已损坏”）"
 codesign --force --deep --sign - "${APP_DST}" >/dev/null 2>&1 || true
 
+# 清掉上一个版本残留的「屏幕录制」授权记录（更新后签名变化会让 TCC 记录失配）
+tccutil reset ScreenCapture "com.mackz.plugin" 2>/dev/null || true
+
 # 校验隔离属性是否真的清干净了
 NEED_SUDO=0
 if xattr -p com.apple.quarantine "${APP_DST}" >/dev/null 2>&1; then

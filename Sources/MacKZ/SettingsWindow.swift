@@ -21,6 +21,8 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     var onDemo: (() -> Void)?
     /// 检查更新（下载并自替换重启）
     var onCheckUpdate: (() -> Void)?
+    /// 修复「屏幕录制」授权（清除更新后残留的过期记录）
+    var onRepairCapture: (() -> Void)?
     /// 实时状态拉取：角度 / 阶段 / 屏幕录制权限
     var statusProvider: (() -> (angle: String, phase: String, capture: String))?
 
@@ -114,10 +116,11 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         capture.font = .systemFont(ofSize: 12)
         captureLabel = capture
         let requestButton = makeButton("申请授权", #selector(requestCapture))
+        let repairButton = makeButton("修复权限", #selector(repairCapture))
         let openButton = makeButton("打开系统设置", #selector(openPrivacySettings))
-        let permissionRow = makeRow(views: [capture, requestButton, openButton])
+        let permissionRow = makeRow(views: [capture, requestButton, repairButton, openButton])
         let tip = NSTextField(wrappingLabelWithString:
-            "Realtime 桌面重投影需要「屏幕录制」权限。首次授权后必须退出并重新启动 MacKZ 才会生效。")
+            "实时桌面重投影需要「屏幕录制」权限。首次授权后必须退出并重新启动 MacKZ 才会生效。\n若设置里已勾选却仍显示未授权（更新后常见），点「修复权限」清除过期记录后重新授权。")
         tip.font = .systemFont(ofSize: 11)
         tip.textColor = .tertiaryLabelColor
         tip.preferredMaxLayoutWidth = 520
@@ -383,6 +386,8 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         onRequestCapture?()
         refreshStatus()
     }
+
+    @objc private func repairCapture() { onRepairCapture?() }
 
     @objc private func openPrivacySettings() {
         // 直达「隐私与安全性 → 屏幕录制」面板

@@ -178,12 +178,16 @@ enum UpdateChecker {
         if [ -d "$WORK/MacKZ.app" ]; then
           rm -rf "$APP"
           cp -R "$WORK/MacKZ.app" "$APP" || exit 1
-          xattr -dr com.apple.quarantine "$APP" 2>/dev/null
+          xattr -cr "$APP" 2>/dev/null
           codesign --force --deep --sign - "$APP" 2>/dev/null
+          # 4) 清掉上一个版本残留的屏幕录制授权记录：
+          #    更新后签名变化会让 TCC 记录与新版本失配，
+          #    表现为「系统设置里已勾选，程序却一直显示未授权且无法再授权」
+          tccutil reset ScreenCapture com.mackz.plugin 2>/dev/null || true
           open "$APP"
         fi
 
-        # 4) 清理
+        # 5) 清理
         rm -rf "$WORK" "$ZIP" "$0"
         """
         let scriptURL = updateDir.appendingPathComponent("install-update.sh")

@@ -42,6 +42,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         status.onOpenSettings = { [weak self] in self?.showSettings() }
         status.onProbe = { [weak self] in self?.runProbe() }
         status.onRequestCapture = { [weak self] in self?.requestCapturePermission() }
+        status.onRepairCapture = { [weak self] in self?.repairCapturePermission() }
         status.onDemo = { [weak self] in self?.engine.playDemo() }
         status.onCheckUpdate = { [weak self] in self?.checkUpdate() }
         status.onQuit = { NSApp.terminate(nil) }
@@ -54,6 +55,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settings.onDemo = { [weak self] in self?.engine.playDemo() }
         settings.onCheckUpdate = { [weak self] in self?.checkUpdate() }
         settings.onRequestCapture = { [weak self] in self?.requestCapturePermission() }
+        settings.onRepairCapture = { [weak self] in self?.repairCapturePermission() }
         settings.statusProvider = { [weak self] in
             guard let self else { return (angle: "--", phase: "--", capture: "未知") }
             let angle = self.engine.lastAngleDeg.map { String(format: "%.1f°", $0) } ?? "--"
@@ -276,10 +278,49 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         if CGRequestScreenCaptureAccess() {
             relaunch(afterGrant: true)
-        } else {
-            notify("需要手动授权",
-                   "请在「系统设置 → 隐私与安全性 → 屏幕录制」中勾选 MacKZ，然后重新启动本插件。")
+            return
+        }
+        // 走到这里说明系统不再弹窗：绝大多数情况是「更新后签名变化，旧的授权记录失配」。
+        // 表现就是：系统设置里明明勾着 MacKZ，程序却一直显示未授权，再点授权也没反应。
+        let alert = NSAlert()
+        alert.messageText = "授权未生效"
+        alert.informativeText = """
+        MacKZ 使用的是本地临时签名，每次更新后签名都会变化，
+        系统里保留的仍是上一个版本的授权记录，因此会出现“设置里已勾选、程序却说未授权”。
+
+        点「修复权限」会自动清除这些过期记录，然后重新向你申请一次。
+        """
+        alert.addButton(withTitle: "修复权限")
+        alert.addButton(withTitle: "打开系统设置")
+        alert.addButton(withTitle: "稍后")
+        switch alert.runModal() {
+        case .alertFirstButtonReturn:
+            repairCapturePermission()
+        case .alertSecondButtonReturn:
             openPrivacySettings()
+        default:
+            break
+        }
+    }
+
+    /// 清除本应用的「屏幕录制」授权记录（tccutil reset），让系统重新询问。
+    /// 这是解决“更新后再也无法授权”的标准做法。
+    private func repairCapturePermission() {
+        let bundleID = Bundle.main.bundleIdentifier ?? "com.mackz.plugin"
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/tccutil")
+        task.arguments = ["reset", "ScreenCapture", bundleID]
+        do {
+            try task.run()
+            task.waitUntilExit()
+            guard task.terminationStatus == 0 else { throw CocoaError(.executableLoad) }
+            NSLog("[MacKZ] 已清除屏幕录制授权记录：%@", bundleID)
+            notify("旧记录已清除",
+                   "点「好」后 MacKZ 会重新申请权限，请在系统弹窗中点「允许」。\n若没有弹窗，请重启 MacKZ 再点一次「授权屏幕录制」。")
+            requestCapturePermission()
+        } catch {
+            notify("自动清除失败",
+                   "请在终端手动执行下面这条命令，然后重启 MacKZ：\n\ntccutil reset ScreenCapture \(bundleID)")
         }
     }
 

@@ -60,6 +60,11 @@ cp -R "${SRC}" "${APP_DST}"
 xattr -cr "${APP_DST}" 2>/dev/null || true
 codesign --force --deep --sign - "${APP_DST}" >/dev/null 2>&1 || true
 
+# 清掉上一个版本残留的「屏幕录制」授权记录：
+# 本地临时签名每次构建都会变，TCC 记录会与新版本失配，
+# 表现为「系统设置里已勾选，程序却一直显示未授权且无法再授权」。
+tccutil reset ScreenCapture "${BUNDLE_ID}" 2>/dev/null || true
+
 echo "==> 配置开机自启"
 AGENT="$HOME/Library/LaunchAgents/${BUNDLE_ID}.plist"
 mkdir -p "$(dirname "${AGENT}")"
