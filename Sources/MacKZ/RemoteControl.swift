@@ -46,6 +46,20 @@ final class RemoteControl {
         return "http://\(ip):\(port)/?t=\(token)"
     }
 
+    /// 配对连接码：`192.168.1.5:52800#836291`。
+    /// 手机在官网配对页粘贴这一串即可解析出 Mac 地址与本次口令，无需再输入 IP。
+    var pairCode: String {
+        guard isRunning, !token.isEmpty, let ip = Self.localIPAddress() else { return "" }
+        return "\(ip):\(port)#\(token)"
+    }
+
+    /// 官网配对页地址。连接码放在 URL 的 `#` 片段里 —— 片段不会发往服务器，只在本机浏览器内解析。
+    var pairPageURL: String {
+        guard !pairCode.isEmpty,
+              let encoded = pairCode.addingPercentEncoding(withAllowedCharacters: .alphanumerics) else { return "" }
+        return "https://kdxzhx.top/mackz-pair#c=\(encoded)"
+    }
+
     // MARK: - 启停
 
     /// 启动监听（纯 HTTP）。
@@ -57,8 +71,8 @@ final class RemoteControl {
     func start(port: UInt16) {
         stop()
         self.port = port
-        // 每次启动换一个口令，重启插件后旧链接自动失效
-        token = String(UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(6)).lowercased()
+        // 每次启动换一个口令；用 6 位纯数字，方便对着屏幕手输
+        token = String(format: "%06d", Int.random(in: 0...999999))
         startListener()
     }
 
@@ -375,7 +389,8 @@ final class RemoteControl {
 
         <script>
           var params = new URLSearchParams(location.search);
-          var token = params.get('t') || '';
+          // t= 是直连地址里的口令；c= 兼容「扫码/配对」后跳进来的写法
+          var token = params.get('t') || params.get('c') || '';
           var slider = document.getElementById('slider');
           var progressText = document.getElementById('progress');
           var phase = document.getElementById('phase');

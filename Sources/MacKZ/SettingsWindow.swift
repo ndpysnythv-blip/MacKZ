@@ -31,10 +31,12 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     var onSimulateOpen: (() -> Void)?
     /// 设置「合盖不休眠」：true = 开启（合盖继续运行），false = 恢复系统默认
     var onSetSleepDisabled: ((Bool) -> Void)?
-    /// 手机遥控信息：是否启用、访问地址、运行状态
-    var remoteInfoProvider: (() -> (enabled: Bool, url: String, status: String))?
+    /// 手机遥控信息：是否启用、访问地址、配对连接码、官网配对页地址、运行状态
+    var remoteInfoProvider: (() -> (enabled: Bool, url: String, code: String, pairURL: String, status: String))?
     /// 「刷新地址」：重新监听（重新读局域网 IP 并换一个随机口令）
     var onRefreshRemote: (() -> Void)?
+    /// 「打开配对页」：在浏览器里打开官网配对页（连接码已带在 URL 片段里）
+    var onOpenPairPage: (() -> Void)?
     /// 打开官网介绍页
     var onOpenHomepage: (() -> Void)?
     /// 实时状态拉取：角度 / 阶段 / 屏幕录制权限
@@ -170,9 +172,11 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         remoteState.lineBreakMode = .byTruncatingMiddle
         remoteLabel = remoteState
         let remoteTip = NSTextField(wrappingLabelWithString:
-            "手机与 Mac 连同一个 Wi-Fi，用手机浏览器打开上面的地址，即可远程控制折叠动画（合上 / 打开 / 播放一次 / 拖动进度）。\n"
-            + "服务只监听本机局域网端口，用纯 http（不使用证书，因此不会出现任何钥匙串授权弹窗）。\n"
-            + "地址里的 t=xxxx 是本次随机生成的口令，只在局域网内有效；换了 Wi-Fi 或 IP 变了，点「刷新地址」重新生成。\n\n"
+            "推荐用法（官网配对页）\n"
+            + "① Mac 上点「打开配对页」，浏览器进入 kdxzhx.top/mackz-pair，页面上会显示大号连接码和二维码；\n"
+            + "② 手机连同一个 Wi-Fi，扫码即可直接进入控制页；扫不了时在配对页输入框里粘贴连接码也一样；\n"
+            + "③ 连接码形如 192.168.1.5:52800#836291，点「复制连接码」可以自己发到手机上。\n\n"
+            + "服务只监听本机局域网端口，用纯 http（不使用证书，因此不会出现任何钥匙串授权弹窗）。\n\n"
             + "打不开时按顺序排查：\n"
             + "①「系统设置 → 网络 → 防火墙」是否拦住了 MacKZ 的传入连接；\n"
             + "② macOS 15 起还需要在「隐私与安全性 → 本地网络」里允许 MacKZ；\n"
@@ -199,7 +203,8 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
 
         stack.addArrangedSubview(sectionBox(title: "手机遥控（演示用）", rows: [
             makeRow(views: [remoteState]),
-            makeRow(views: [makeButton("复制链接", #selector(copyRemoteURL)),
+            makeRow(views: [makeButton("复制连接码", #selector(copyRemoteURL)),
+                            makeButton("打开配对页", #selector(openPairPage)),
                             makeButton("刷新地址", #selector(refreshRemoteURL))]),
             switchRow("启用手机遥控", \.remoteControl),
             switchRow("允许手机陀螺仪接管角度", \.phoneGyro),
@@ -599,30 +604,34 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     @objc private func disableSleepDisabled() { onSetSleepDisabled?(false) }
     @objc private func openLockScreenSettings() { PowerControl.openLockScreenSettings() }
 
-    /// 刷新手机遥控地址与状态
+    /// 刷新手机遥控连接码与状态
     func refreshRemoteInfo() {
         guard let info = remoteInfoProvider?() else { return }
         if !info.enabled {
             remoteLabel?.stringValue = "手机遥控：已关闭"
             remoteLabel?.textColor = .secondaryLabelColor
-        } else if info.url.isEmpty {
+        } else if info.code.isEmpty {
             remoteLabel?.stringValue = "手机遥控：\(info.status)"
             remoteLabel?.textColor = .systemOrange
         } else {
-            remoteLabel?.stringValue = "手机遥控：\(info.url)"
+            remoteLabel?.stringValue = "连接码：\(info.code)"
             remoteLabel?.textColor = .systemGreen
         }
     }
 
+    /// 复制连接码（`192.168.1.5:52800#836291`），手机在官网配对页粘贴即可
     @objc private func copyRemoteURL() {
-        guard let url = remoteInfoProvider?().url, !url.isEmpty else { return }
+        guard let code = remoteInfoProvider?().code, !code.isEmpty else { return }
         NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(url, forType: .string)
-        flashStatus("手机遥控地址已复制：\(url)")
+        NSPasteboard.general.setString(code, forType: .string)
+        flashStatus("连接码已复制：\(code)")
     }
 
     /// 打开官网介绍页
     @objc private func openHomepage() { onOpenHomepage?() }
+
+    /// 打开官网配对页（手机遥控配对入口）
+    @objc private func openPairPage() { onOpenPairPage?() }
 
     /// 刷新地址：真的重新起一次监听（重新读局域网 IP + 换一个新口令），而不是只刷新文字显示
     @objc private func refreshRemoteURL() { onRefreshRemote?() }

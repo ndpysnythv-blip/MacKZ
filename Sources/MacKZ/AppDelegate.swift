@@ -76,6 +76,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         settings.onSetSleepDisabled = { [weak self] disabled in self?.setSleepDisabled(disabled) }
         settings.onRefreshRemote = { [weak self] in self?.restartRemote() }
+        settings.onOpenPairPage = { [weak self] in
+            guard let url = self?.remote.pairPageURL, !url.isEmpty, let target = URL(string: url) else { return }
+            NSWorkspace.shared.open(target)
+        }
         settings.onOpenHomepage = { NSWorkspace.shared.open(UpdateChecker.homepageURL) }
         settings.statusProvider = { [weak self] in
             guard let self else { return (angle: "--", phase: "--", capture: "未知") }
@@ -112,8 +116,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 手机陀螺仪：手机贴在屏幕上时，用手机姿态角代替铰链传感器
         remote.onHinge = { [weak self] angle in self?.acceptPhoneHinge(angle) }
         settings.remoteInfoProvider = { [weak self] in
-            guard let self else { return (enabled: false, url: "", status: "未启动") }
-            return (enabled: self.remote.isRunning, url: self.remote.accessURL, status: self.remoteStatus)
+            guard let self else { return (enabled: false, url: "", code: "", pairURL: "", status: "未启动") }
+            return (enabled: self.remote.isRunning, url: self.remote.accessURL,
+                    code: self.remote.pairCode, pairURL: self.remote.pairPageURL, status: self.remoteStatus)
         }
         // 按配置启停手机遥控
         if config.remoteControl {
