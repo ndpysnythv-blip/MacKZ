@@ -54,6 +54,8 @@ final class LidAngleSensor {
     private var thread: Thread?
     private var timer: Timer?
     private var runLoop: CFRunLoop?
+    /// 启动时传入的配置（采样频率等；仅在传感器线程读取）
+    private var config = Config()
 
     // 传感器线程内部持有的 HID 资源（仅在传感器线程访问）
     private var manager: IOHIDManager?
@@ -73,6 +75,7 @@ final class LidAngleSensor {
         guard !running else { return }
         running = true
         generation += 1
+        self.config = config
         let gen = generation
 
         let t = Thread { [weak self] in self?.sensorThreadMain(gen) }
@@ -106,6 +109,13 @@ final class LidAngleSensor {
         let options = IOOptionBits(kIOHIDOptionsTypeNone)
         let manager = IOHIDManagerCreate(kCFAllocatorDefault, options)
 
+        // 本线程的 RunLoop：CFRunLoopGetCurrent() 返回可选值，这里显式解包
+        guard let rl = CFRunLoopGetCurrent() else {
+            onStatus?("传感器线程 RunLoop 不可用")
+            lock.lock(); running = false; lock.unlock()
+            return
+        }
+
         // 设备级匹配：只认 Apple 的 Lid Angle Sensor，避免误选加速度计 / 环境光传感器
         let deviceMatch: [String: Any] = [
             kIOHIDVendorIDKey as String: kAppleVendorID,
@@ -127,7 +137,6 @@ final class LidAngleSensor {
         }, Unmanaged.passUnretained(self).toOpaque())
 
         // 调度到本线程的 RunLoop（.commonModes 保证拖动窗口等交互期间也不丢事件）
-        let rl = CFRunLoopGetCurrent()
         lock.lock(); runLoop = rl; lock.unlock()
         IOHIDManagerScheduleWithRunLoop(manager, rl, CFRunLoopMode.commonModes.rawValue)
 
@@ -208,8 +217,14 @@ final class LidAngleSensor {
             guard let elements = IOHIDDeviceCopyMatchingElements(
                 device, elementMatch as CFDictionary, IOOptionBits(kIOHIDOptionsTypeNone)) as? [IOHIDElement] else { continue }
             for element in elements {
+                // IOHIDDeviceGetValue 的第三个参数类型是 UnsafeMutablePointer<Unmanaged<IOHIDValue>>，
+                // 与 Unmanaged<IOHIDValue>? 的内存表示不同，需要先做指针重绑定
                 var valueRef: Unmanaged<IOHIDValue>?
-                let result = IOHIDDeviceGetValue(device, element, &valueRef)
+                let result = withUnsafeMutablePointer(to: &valueRef) { pointer in
+                    pointer.withMemoryRebound(to: Unmanaged<IOHIDValue>.self, capacity: 1) { rebound in
+                        IOHIDDeviceGetValue(device, element, rebound)
+                    }
+                }
                 if result == kIOReturnSuccess, let value = valueRef?.takeUnretainedValue() {
                     let angle = Double(IOHIDValueGetIntegerValue(value))
                     if angle.isFinite, (0...360).contains(angle) { return angle }
