@@ -1,0 +1,533 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MacKZ · Duo Continuity 开合过渡动画</title>
+<style>
+  :root{
+    color-scheme:dark;
+    --hinge-blur-fine:6px; --hinge-blur-mid:18px; --hinge-blur-wide:40px;
+    --ui1:#4f5ceb; --ui2:#9e4feb;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font:14px/1.6 -apple-system,"PingFang SC",sans-serif;background:radial-gradient(1200px 600px at 50% -10%,#141a2b,#080a10 60%);color:#e7eaf3}
+  .wrap{max-width:1000px;margin:0 auto;padding:28px 20px 60px}
+  h1{font-size:20px;margin:0 0 6px;letter-spacing:.2px}
+  .kicker{font-size:12px;letter-spacing:2px;color:#7c88a8;text-transform:uppercase;margin-bottom:10px}
+  .sub{color:#8b93a7;font-size:12.5px;margin-bottom:20px}
+  .card{background:linear-gradient(180deg,#10141f,#0c0f18);border:1px solid #222a3d;border-radius:16px;padding:16px;margin-bottom:16px}
+  .card h2{font-size:13px;margin:0 0 12px;color:#aab3c8;font-weight:600;letter-spacing:.3px}
+  button{background:linear-gradient(180deg,#5a68ff,#4149d6);color:#fff;border:0;border-radius:10px;padding:9px 15px;font-size:13px;cursor:pointer;font-weight:500}
+  button:hover{filter:brightness(1.08)}
+  button.ghost{background:#1b2130;border:1px solid #2b3245}
+  button:disabled{opacity:.45;cursor:not-allowed}
+  .row{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+  .row+.row{margin-top:10px}
+  .row label{width:132px;color:#8b93a7;font-size:12px;flex:none}
+  input[type=range]{flex:1;min-width:160px;accent-color:#5a68ff}
+  .val{width:78px;text-align:right;font-variant-numeric:tabular-nums;color:#c3cbdd;font-size:12px}
+  .pill{font-size:11.5px;padding:3px 9px;border-radius:999px;background:#1b2130;border:1px solid #2b3245;color:#9aa4bb}
+  .pill.ok{background:#10301f;border-color:#1e5c39;color:#6ee7a5}
+  .pill.warn{background:#31240f;border-color:#6b4a13;color:#f3c065}
+  .pill.err{background:#31151a;border-color:#6b1f2b;color:#f78598}
+  code,kbd{background:#161b26;border:1px solid #262e40;border-radius:6px;padding:2px 6px;font-size:12px}
+  .hex{margin-top:8px;font:12px/1.5 ui-monospace,Menlo,monospace;color:#7f8aa3;word-break:break-all;max-height:64px;overflow:auto}
+
+  /* ===== Duo Continuity 舞台 ===== */
+  .stage{position:relative;height:380px;border-radius:18px;overflow:hidden;background:#05060a;
+         border:1px solid #232a3d;perspective:1400px;perspective-origin:50% 50%;isolation:isolate}
+  .halo{position:absolute;inset:-20%;background:radial-gradient(50% 60% at 50% 50%,rgba(90,104,255,.18),transparent 70%);pointer-events:none}
+  /* 单块 Mac 屏幕：上方 = 可翻动的「上屏」；下方 = 键盘侧「下屏」（承接倒影） */
+  .lid{position:absolute;left:0;top:0;width:100%;overflow:hidden;opacity:0;
+       transform-origin:center bottom;will-change:transform,opacity}
+  .lid .layer,.lid .ghost{position:absolute;left:0;top:0;width:100%;height:100%;overflow:hidden}
+  .lid .screen{position:absolute;left:0;top:0;width:100%;height:var(--stage-h,380px)}
+  .lid .layer.blur-fine{filter:blur(var(--hinge-blur-fine))}
+  .lid .layer.blur-mid{filter:blur(var(--hinge-blur-mid))}
+  .lid .layer.blur-wide{filter:blur(var(--hinge-blur-wide))}
+  .ghost{opacity:0;mix-blend-mode:screen;will-change:transform,opacity}
+  /* 键盘侧（下屏）：深色键盘面 + 上屏倒影（镜像 = 绕铰链线翻折） */
+  .deck{position:absolute;left:0;width:100%;overflow:hidden;opacity:0}
+  .deck .refl{position:absolute;left:0;top:0;width:100%;height:100%;overflow:hidden;opacity:0;
+       transform:scaleY(-1);filter:blur(16px);
+       -webkit-mask-image:linear-gradient(to bottom,rgba(0,0,0,0) 0%,rgba(0,0,0,.85) 100%)}
+  /* 倒影源：整屏画面，偏移量 = 下屏高 - 上屏高，翻转后正好呈现“铰链线两侧镜像” */
+  .deck .refl .screen{position:absolute;left:0;width:100%;height:var(--stage-h,380px);
+       top:calc(var(--deck-h,140px) - var(--lid-h,240px))}
+  .deck-sheen{position:absolute;inset:0;
+       background:linear-gradient(180deg,rgba(22,26,40,.30),rgba(6,8,14,.80) 55%,rgba(3,4,8,.95))}
+  /* 铰链线：辉光 + 青/品红横向色散 */
+  .hinge-glow,.crease{position:absolute;left:0;width:100%;pointer-events:none}
+  .hinge-glow{height:14px;margin-top:-7px;
+    background:linear-gradient(180deg,rgba(115,217,255,0),#cdf1ff,rgba(115,217,255,0));opacity:.35}
+  .crease{height:2px;opacity:0}
+  .crease.cy{background:linear-gradient(90deg,rgba(89,242,255,0),rgba(89,242,255,.9),rgba(89,242,255,0))}
+  .crease.mg{background:linear-gradient(90deg,rgba(255,107,217,0),rgba(255,107,217,.8),rgba(255,107,217,0))}
+  .sweep{position:absolute;left:14%;width:72%;height:200px;pointer-events:none;opacity:.9;
+    background:linear-gradient(180deg,rgba(255,255,255,0),rgba(200,225,255,.15),rgba(255,255,255,0));
+    transform:rotate(-2.6deg)}
+  .scrim{position:absolute;inset:0;pointer-events:none;
+    background:linear-gradient(180deg,rgba(4,6,12,.62),rgba(8,10,20,.28),rgba(4,6,12,.62));opacity:0}
+  .hud{position:absolute;left:14px;top:12px;font:12px/1.5 ui-monospace,Menlo,monospace;color:#ffffffb0;text-shadow:0 1px 6px #000}
+  .badge{position:absolute;left:0;right:0;bottom:14px;text-align:center;font:12px/1 ui-monospace,Menlo,monospace;color:#ffffffa8}
+
+  /* 模拟屏幕内容（若接入真实截屏可替换为图片） */
+  .screen{position:absolute;inset:0;background:
+      radial-gradient(700px 420px at 20% 15%,rgba(79,92,235,.55),transparent 60%),
+      radial-gradient(600px 400px at 85% 85%,rgba(158,79,235,.45),transparent 62%),
+      linear-gradient(160deg,#0b1020,#131a30 55%,#0a0e1a)}
+  .screen .bar{position:absolute;left:22px;right:22px;height:12px;border-radius:6px;background:#ffffff14}
+  .screen .blk{position:absolute;border-radius:12px;background:linear-gradient(140deg,#ffffff1f,#ffffff08);border:1px solid #ffffff12}
+  .screen .t{position:absolute;font-size:13px;color:#ffffff8c;letter-spacing:.5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="kicker">MacKZ Plugin</div>
+  <h1>Duo Continuity · 折叠开合过渡动画</h1>
+  <div class="sub">⚠️ 本页只是**逻辑预览**（近似几何），真机效果由 macOS 端的 Metal 着色器实时渲染：ScreenCaptureKit 抓桌面 → 射线投射重投影到虚拟折叠面 → 两趟高斯玻璃模糊 + 边缘色散，按屏幕刷新率驱动。参数与真机一一对应，可在这里先调好数值再写进 config.json。</div>
+
+  <!-- ===== 数据源 ===== -->
+  <div class="card">
+    <h2>铰链数据源</h2>
+    <div class="row">
+      <button id="connect">连接铰链传感器（授权）</button>
+      <button class="ghost" id="useSim">改用模拟滑块</button>
+      <span class="pill" id="hidState">未连接</span>
+    </div>
+    <div class="row">
+      <label>角度字段偏移</label>
+      <input type="range" id="offset" min="0" max="12" step="1" value="0">
+      <span class="val" id="offsetVal">0</span>
+      <span class="pill" id="hidHint">自动识别中</span>
+    </div>
+    <div class="hex" id="hex">等待传感器数据…（WebHID 需 Chrome/Edge，且页面为 https 或 localhost）</div>
+  </div>
+
+  <!-- ===== 舞台 ===== -->
+  <div class="stage" id="stage">
+    <div class="halo"></div>
+    <!-- 键盘侧（下屏）：承接倒影 -->
+    <div class="deck" id="deck">
+      <div class="refl" id="refl"></div>
+      <div class="deck-sheen"></div>
+    </div>
+    <!-- 上屏：绕铰链线翻动 -->
+    <div class="lid" id="lid">
+      <div class="layer sharp"></div>
+      <div class="layer blur-fine"></div>
+      <div class="layer blur-mid"></div>
+      <div class="layer blur-wide"></div>
+      <div class="ghost"></div>
+    </div>
+    <div class="scrim" id="scrim"></div>
+    <div class="hinge-glow" id="hinge"></div>
+    <div class="crease cy" id="cy"></div>
+    <div class="crease mg" id="mg"></div>
+    <div class="sweep" id="sweep"></div>
+    <div class="hud" id="hud"></div>
+    <div class="badge" id="badge"></div>
+  </div>
+
+  <!-- ===== 参数 ===== -->
+  <div class="card">
+    <h2>角度与智能判定</h2>
+    <div class="row">
+      <label>铰链角度（模拟）</label>
+      <input type="range" id="angle" min="0" max="130" step="0.5" value="0">
+      <span class="val" id="angleVal">0°</span>
+    </div>
+    <div class="row">
+      <label>停顿判定（ms）</label>
+      <input type="range" id="stall" min="80" max="900" step="10" value="350">
+      <span class="val" id="stallVal">350</span>
+    </div>
+    <div class="row">
+      <label>加速倍率</label>
+      <input type="range" id="speed" min="1" max="8" step="0.5" value="3">
+      <span class="val" id="speedVal">3.0×</span>
+    </div>
+    <div class="row">
+      <label>角度阈值（度）</label>
+      <input type="range" id="eps" min="0.2" max="3" step="0.1" value="0.8">
+      <span class="val" id="epsVal">0.8</span>
+    </div>
+    <div class="row">
+      <label>折叠角（度）</label>
+      <input type="range" id="fold" min="40" max="100" step="1" value="88">
+      <span class="val" id="foldVal">88°</span>
+    </div>
+    <div class="row">
+      <label>铰链位置</label>
+      <input type="range" id="hingeRatio" min="0.3" max="0.9" step="0.01" value="0.62">
+      <span class="val" id="hingeRatioVal">0.62</span>
+    </div>
+    <div class="row">
+      <label>停手自动补完</label>
+      <input type="checkbox" id="autoFinish" checked style="flex:none;width:auto">
+      <span class="pill">勾选＝按需求自动加速补完；取消＝纯 1:1 跟随，方便观察折叠细节</span>
+    </div>
+    <div class="row">
+      <label>渐进模糊强度</label>
+      <input type="range" id="blur" min="0.5" max="2.2" step="0.1" value="1">
+      <span class="val" id="blurVal">1.0×</span>
+    </div>
+    <div class="row">
+      <button id="auto">演示：抬到一半停手</button>
+      <button class="ghost" id="reset">复位到合屏</button>
+      <span class="pill" id="phase">待机</span>
+    </div>
+  </div>
+
+  <!-- ===== 一键安装 ===== -->
+  <div class="card">
+    <h2>自动安装到本机 Mac</h2>
+    <div class="row">
+      <button id="download">下载一键安装程序（MacKZ-安装.command）</button>
+      <button class="ghost" id="copyCmd">复制终端安装命令</button>
+      <button class="ghost" id="copyUninstall">复制卸载命令</button>
+    </div>
+    <div class="hex" id="installInfo">
+      脚本会依次完成：编译 → 安装到 /Applications → 写入开机自启（LaunchAgent）→ 立即启动。<br>
+      放到 MacKZ 目录后双击 <code>MacKZ-安装.command</code> 即可；如提示「无法验证开发者」，右键 → 打开。
+    </div>
+  </div>
+</div>
+
+<script>
+/* =========================================================================
+ * 1) 状态机：与 Swift 端 HingeAnimationEngine 完全等价的精简实现
+ * ========================================================================= */
+const cfg = {
+  stallMs: 350, eps: 0.8, speed: 3.0, clip: 0.6, minCatch: 120,
+  closed: 0, open: 130, rearm: 0.8, smoothing: 0.35,
+  foldDeg: 88, blurScale: 1.0, hingeRatio: 0.62, autoFinish: true, lidH: 0, deckH: 0
+};
+let holding = false;   // 鼠标按住角度滑块 = “手正扶着屏幕”，不判定停顿
+const st = {
+  progress: 0, phase: 'idle', raw: null, lastAngle: null, lastT: 0, lastMoveT: 0,
+  pending: 0, target: null, openLatched: false, closeLatched: false, catchAt: 0,
+  catchTarget: 0, catchRate: 0
+};
+
+// 主输入：角度 + 时间戳（真实传感器与模拟滑块共用同一条通路）
+function update(angle, t) {
+  // 采样中断保护：长时间无数据后重置时间基准，避免误判为“停顿”
+  if (st.lastT > 0 && (t - st.lastT) / 1000 > 0.5) { st.lastT = t; st.lastAngle = angle; st.pending = 0; }
+
+  // 1) 平滑
+  const sm = (cfg.smoothing > 0 && st.raw !== null) ? st.raw + (angle - st.raw) * cfg.smoothing : angle;
+  st.raw = sm;
+  // 2) 角度 -> 进度（1:1 跟随）
+  st.progress = clamp((sm - cfg.closed) / (cfg.open - cfg.closed), 0, 1);
+
+  // 3) 有效移动（累积阈值抗抖）→ 取消加速，回到跟随
+  if (st.lastAngle !== null) st.pending += sm - st.lastAngle;
+  st.lastAngle = sm; st.lastT = t;
+  if (Math.abs(st.pending) >= cfg.eps) {
+    const dir = st.pending > 0 ? 1 : -1;
+    st.pending = 0; st.lastMoveT = t;
+    if (st.progress < cfg.rearm) st.openLatched = false;
+    if (st.progress > 1 - cfg.rearm) st.closeLatched = false;
+    if (dir > 0) { if (!st.openLatched) st.target = 1; }
+    else { if (!st.closeLatched) st.target = 0; }
+    st.phase = 'tracking';
+  }
+  // 4) 跟到端点 → 序列自然结束，交回正常画面
+  if (st.phase === 'tracking' && st.target !== null &&
+      ((st.target >= 1 && st.progress >= 1) || (st.target <= 0 && st.progress <= 0))) return finish(st.target);
+  // 5) 停顿判定 → 加速补完剩余片段（拖拽中或关闭自动补完时不做）
+  if (st.phase === 'tracking' && st.target !== null && cfg.autoFinish && !holding &&
+      t - st.lastMoveT >= cfg.stallMs) startCatch(t);
+}
+function startCatch(t) {
+  const remain = Math.abs(st.target - st.progress);
+  if (remain < 0.002) return finish(st.target);
+  const seconds = Math.max(cfg.clip * remain / Math.max(cfg.speed, .05), cfg.minCatch / 1000);
+  st.catchRate = remain / seconds; st.catchTarget = st.target; st.catchAt = t; st.phase = 'catchUp';
+}
+function tickCatch(t) {
+  if (st.phase !== 'catchUp') return;
+  const dt = Math.min((t - st.catchAt) / 1000, .05); st.catchAt = t;
+  const dir = st.catchTarget > st.progress ? 1 : -1;
+  st.progress += dir * st.catchRate * dt;
+  if ((dir > 0 && st.progress >= st.catchTarget) || (dir < 0 && st.progress <= st.catchTarget)) return finish(st.catchTarget);
+}
+function finish(target) {
+  if (target >= 1) { st.openLatched = true; st.closeLatched = false; }
+  else { st.closeLatched = true; st.openLatched = false; }
+  st.target = null; st.phase = 'idle'; st.progress = target >= 1 ? 1 : 0;
+}
+const clamp = (v, a, b) => Math.min(Math.max(v, a), b);
+
+/* =========================================================================
+ * 2) Duo Continuity 渲染：折叠透视 + 渐进模糊遮罩 + 连续流转
+ * ========================================================================= */
+const $ = id => document.getElementById(id);
+const stage = $('stage'), lid = $('lid'), deck = $('deck'), refl = $('refl');
+// 铰链位置（距屏幕顶边的像素距离）→ 上屏 / 下屏高度；写入 CSS 变量供内部图层撑满整屏
+function layout() {
+  const H = stage.clientHeight;
+  cfg.lidH = H * cfg.hingeRatio;
+  cfg.deckH = H - cfg.lidH;
+  const root = document.documentElement.style;
+  root.setProperty('--stage-h', H + 'px');
+  root.setProperty('--lid-h', cfg.lidH + 'px');
+  root.setProperty('--deck-h', cfg.deckH + 'px');
+}
+layout();
+window.addEventListener('resize', layout);
+
+const PHASE_TEXT = { idle: '待机（正常桌面）', tracking: '跟随角度', catchUp: '停顿 · 加速补完' };
+
+function render() {
+  const p = clamp(st.progress, 0, 1), closed = 1 - p;
+  const active = st.phase !== 'idle';
+
+  // 交接曲线：两端淡出，动画结束瞬间与真实桌面无缝衔接
+  const edge = 0.12;
+  const presence = active ? Math.min(1, Math.min(p / edge, closed / edge)) : 0;
+  const fold = closed * cfg.foldDeg;
+
+  // 铰链线位置：上屏（会翻动）+ 下屏（键盘侧，平放）
+  const H = stage.clientHeight, lidH = H * cfg.hingeRatio, deckH = H - lidH;
+  lid.style.height = lidH + 'px';
+  deck.style.top = lidH + 'px';
+  deck.style.height = deckH + 'px';
+  lid.style.opacity = presence; deck.style.opacity = presence;
+  // 上屏绕底部铰链线翻动：0° = 掀开贴合屏面，foldDeg = 扣到键盘面（CSS 取负角度）
+  lid.style.transform = `rotateX(${-fold}deg)`;
+
+  // 渐进模糊：越闭合模糊带越宽，自铰链线向屏顶扩散
+  const extent = (0.16 + 0.62 * p);
+  const levels = [extent, extent * 0.60, extent * 0.28];
+  applyMasks(lid, levels, 'to top');     // 铰链在下，越往上越模糊
+
+  // 画面连续流转：鬼影向远离铰链的方向漂移 + 轻微拉伸
+  ghost(lid, closed * 0.04 * H, closed);
+  // 下屏倒影：越打开（屏越亮）倒影越明显
+  refl.style.opacity = 0.10 + 0.26 * p;
+  // 铰链线辉光与色散
+  $('scrim').style.opacity = presence * 0.9;
+  $('hinge').style.top = lidH + 'px';
+  $('hinge').style.opacity = presence * (0.28 + 0.72 * closed);
+  const ca = (0.10 + 0.55 * closed);
+  $('cy').style.top = (lidH - 3) + 'px'; $('cy').style.opacity = ca;
+  $('mg').style.top = (lidH + 1) + 'px'; $('mg').style.opacity = ca * 0.85;
+  // 横向高光带自铰链线向屏顶扫过（与“掀开”方向一致）
+  $('sweep').style.top = (lidH * (1 - p) - 100) + 'px';
+  $('sweep').style.opacity = presence;
+
+  $('badge').textContent = `进度 ${Math.round(p * 100)}%`;
+  $('hud').textContent = `${PHASE_TEXT[st.phase]}　进度 ${(p * 100).toFixed(0)}%`;
+  $('phase').textContent = PHASE_TEXT[st.phase];
+  $('phase').className = 'pill' + (st.phase === 'catchUp' ? ' ok' : '');
+}
+
+// 3 级模糊副本的遮罩：n 之前不透明（显示模糊），之后透明（露出下一层）
+function applyMasks(panel, levels, dir) {
+  const soft = 7;
+  panel.querySelectorAll('.layer.blur-fine, .layer.blur-mid, .layer.blur-wide').forEach((el, i) => {
+    const n = clamp(levels[i] * 100, 2, 98.5);
+    const g = `linear-gradient(${dir}, #000 0%, #000 ${Math.max(n - soft, 0)}%, transparent ${Math.min(n + soft, 100)}%, transparent 100%)`;
+    el.style.webkitMaskImage = g; el.style.maskImage = g;
+  });
+}
+function ghost(panel, dy, closed) {
+  const g = panel.querySelector('.ghost');
+  g.style.opacity = 0.09 + 0.18 * closed;
+  // 向远离铰链的方向（上）漂移，位移量即为像素值
+  g.style.transform = `translateY(${-dy}px) scale(1,1.02)`;
+}
+
+/* 模拟屏幕内容：给每个面板的复制层填入同一份 UI 结构（真实端用截屏图替换） */
+function buildScreenContent(el) {
+  el.innerHTML = `
+    <div class="screen">
+      <div class="bar" style="top:34px;width:38%"></div>
+      <div class="bar" style="top:58px;width:62%;opacity:.7"></div>
+      <div class="blk" style="left:22px;top:96px;width:44%;height:96px"></div>
+      <div class="blk" style="left:52%;top:96px;width:26%;height:96px"></div>
+      <div class="blk" style="left:22px;top:208px;width:78%;height:52px"></div>
+      <div class="t" style="left:34px;top:132px">Duo Continuity</div>
+      <div class="t" style="left:34px;top:160px;opacity:.6;font-size:11px">hinge-driven transition</div>
+      <div class="t" style="left:22px;top:272px;opacity:.5;font-size:11px">MacKZ · Global Overlay</div>
+    </div>`;
+}
+document.querySelectorAll('.lid .layer, .lid .ghost, .deck .refl').forEach(buildScreenContent);
+
+/* =========================================================================
+ * 3) 主循环：真实传感器与模拟滑块共用
+ * ========================================================================= */
+function loop(now) {
+  if (st.phase === 'catchUp') tickCatch(now);            // 加速阶段由时间轴推进
+  if (!hid.connected) update(parseFloat($('angle').value), now);   // 模拟模式：滑块即铰链
+  render();
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+
+/* =========================================================================
+ * 4) WebHID 真机铰链读取（需要用户手势授权）
+ * ========================================================================= */
+const hid = { device: null, connected: false, offset: 0, auto: true, buf: [] };
+
+$('connect').addEventListener('click', async () => {
+  if (!('hid' in navigator)) {
+    setHid('err', '浏览器不支持 WebHID（请用 Chrome/Edge，且页面为 https 或 localhost）');
+    return;
+  }
+  try {
+    setHid('warn', '等待授权…');
+    // 关键：按「传感器」用途页(0x0020)过滤，铰链角度传感器就在该类别下
+    const devices = await navigator.hid.requestDevice({
+      filters: [{ usagePage: 0x0020 }]
+    });
+    if (!devices.length) { setHid('warn', '未选择设备'); return; }
+    const dev = devices[0];
+    if (!dev.opened) await dev.open();
+    hid.device = dev; hid.connected = true;
+    dev.addEventListener('inputreport', onReport);
+    setHid('ok', `已连接：${dev.productName || 'HID 设备'}`);
+    $('hidHint').textContent = '自动识别中';
+  } catch (e) {
+    setHid('err', '授权失败：' + (e && e.message ? e.message : e));
+  }
+});
+
+$('useSim').addEventListener('click', async () => {
+  if (hid.device && hid.device.opened) { try { await hid.device.close(); } catch (_) {} }
+  hid.device = null; hid.connected = false;
+  setHid('warn', '模拟模式（滑块即铰链）');
+  st.phase = 'idle'; st.progress = 0; st.raw = null; st.lastAngle = null; st.target = null;
+});
+
+// 解析输入报文：Apple 角度传感器为 float32 小端，偏移在不同固件上可能不同 → 自动识别
+function onReport(ev) {
+  const dv = ev.data;
+  const bytes = [];
+  for (let i = 0; i < dv.byteLength; i++) bytes.push(dv.getUint8(i));
+  const hex = bytes.map(b => b.toString(16).padStart(2, '0')).join(' ');
+  hid.buf.push(hex); if (hid.buf.length > 6) hid.buf.shift();
+  $('hex').textContent = 'reportId=' + ev.reportId + ' | ' + hid.buf.join('   ');
+
+  const off = hid.auto ? findAngleOffset(dv) : hid.offset;
+  if (off == null) return;
+  if (hid.auto && off !== hid.offset) { hid.offset = off; $('offset').value = off; $('offsetVal').textContent = off; $('hidHint').textContent = '已自动识别偏移 ' + off; }
+  const angle = dv.getFloat32(off, true);
+  if (!isFinite(angle)) return;
+  $('angleVal').textContent = angle.toFixed(1) + '°';
+  $('hidHint').textContent = `实时 ${angle.toFixed(2)}°`;
+  update(angle, performance.now());     // 真实数据直接进同一条状态机通路
+}
+
+// 自动识别：扫描所有 4 字节窗口，取落在 0~180 且值稳定的 float32 偏移
+function findAngleOffset(dv) {
+  for (let o = 0; o + 4 <= dv.byteLength; o++) {
+    const v = dv.getFloat32(o, true);
+    if (isFinite(v) && v >= 0 && v <= 180 && Math.abs(v) < 200) return o;
+  }
+  // 退一步：尝试 uint16 小端（部分固件按定点上报）
+  for (let o = 0; o + 2 <= dv.byteLength; o++) {
+    const v = dv.getUint16(o, true);
+    if (v >= 0 && v <= 18000 && v > 0) return o;   // 需要外部确认后再用
+  }
+  return null;
+}
+
+$('offset').addEventListener('input', e => {
+  hid.offset = +e.target.value; hid.auto = false;
+  $('offsetVal').textContent = e.target.value;
+  $('hidHint').textContent = '手动偏移 ' + e.target.value;
+});
+
+function setHid(kind, text) {
+  const el = $('hidState');
+  el.textContent = text;
+  el.className = 'pill' + (kind === 'ok' ? ' ok' : kind === 'warn' ? ' warn' : kind === 'err' ? ' err' : '');
+}
+
+/* =========================================================================
+ * 5) 参数与演示控件
+ * ========================================================================= */
+$('angle').addEventListener('input', e => {
+  $('angleVal').textContent = e.target.value + '°';
+  if (hid.connected) return;
+  update(parseFloat(e.target.value), performance.now());   // 手动拖也无延迟反馈
+});
+$('stall').addEventListener('input', e => { cfg.stallMs = +e.target.value; $('stallVal').textContent = e.target.value; });
+$('speed').addEventListener('input', e => { cfg.speed = +e.target.value; $('speedVal').textContent = (+e.target.value).toFixed(1) + '×'; });
+$('eps').addEventListener('input', e => { cfg.eps = +e.target.value; $('epsVal').textContent = (+e.target.value).toFixed(1); });
+$('fold').addEventListener('input', e => { cfg.foldDeg = +e.target.value; $('foldVal').textContent = e.target.value + '°'; });
+$('hingeRatio').addEventListener('input', e => { cfg.hingeRatio = +e.target.value; $('hingeRatioVal').textContent = (+e.target.value).toFixed(2); layout(); });
+$('autoFinish').addEventListener('change', e => { cfg.autoFinish = e.target.checked; });
+// 拖拽角度滑块期间视为“手在抬/合屏幕”，不做停顿加速
+$('angle').addEventListener('pointerdown', () => { holding = true; });
+window.addEventListener('pointerup', () => { holding = false; });
+window.addEventListener('pointercancel', () => { holding = false; });
+$('blur').addEventListener('input', e => {
+  cfg.blurScale = +e.target.value; $('blurVal').textContent = (+e.target.value).toFixed(1) + '×';
+  document.documentElement.style.setProperty('--hinge-blur-fine', (6 * cfg.blurScale) + 'px');
+  document.documentElement.style.setProperty('--hinge-blur-mid', (18 * cfg.blurScale) + 'px');
+  document.documentElement.style.setProperty('--hinge-blur-wide', (40 * cfg.blurScale) + 'px');
+});
+
+// 演示：以 ease-out 抬到一半后停手 → 观察停顿加速补完与端点解锁
+$('auto').addEventListener('click', () => {
+  if (hid.connected) { setHid('warn', '演示模式已暂停（传感器接管中）'); return; }
+  const start = performance.now(), from = parseFloat($('angle').value), to = 62, dur = 1200;
+  (function step(now) {
+    const k = Math.min((now - start) / dur, 1);
+    const v = from + (to - from) * (1 - Math.pow(1 - k, 3));
+    $('angle').value = v; $('angleVal').textContent = v.toFixed(1) + '°';
+    if (k < 1) requestAnimationFrame(step);
+  })(start);
+});
+$('reset').addEventListener('click', () => {
+  $('angle').value = 0; $('angleVal').textContent = '0°';
+  Object.assign(st, { progress: 0, phase: 'idle', raw: null, lastAngle: null, lastT: 0, lastMoveT: 0,
+                      pending: 0, target: null, openLatched: false, closeLatched: false });
+});
+
+/* =========================================================================
+ * 6) 一键安装：直接下载可双击运行的 .command 安装程序
+ * ========================================================================= */
+const INSTALL_SCRIPT = `#!/usr/bin/env bash
+# MacKZ 一键安装（双击运行）：编译 → 安装到 /Applications → 开机自启 → 启动
+set -euo pipefail
+cd "$(dirname "$0")"
+if [ ! -d "./MacKZ" ] && [ ! -f "./build.sh" ]; then
+  echo "请先把本脚本放到 MacKZ 项目目录（与 build.sh 同级）再运行。"; exit 1
+fi
+if [ -f "./install.sh" ]; then
+  bash ./install.sh
+else
+  echo "缺少 install.sh，请使用项目完整目录。"; exit 1
+fi
+read -n 1 -s -r -p "按任意键关闭…"
+`;
+const INSTALL_CMD = 'cd /path/to/MacKZ && chmod +x install.sh && ./install.sh';
+const UNINSTALL_CMD = 'cd /path/to/MacKZ && ./install.sh --uninstall';
+
+$('download').addEventListener('click', () => {
+  const blob = new Blob([INSTALL_SCRIPT], { type: 'text/x-shellscript' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'MacKZ-安装.command';
+  a.click();
+  URL.revokeObjectURL(a.href);
+  $('installInfo').innerHTML = '已下载 <code>MacKZ-安装.command</code>：把它放进 MacKZ 目录后双击运行；' +
+    '若提示「无法验证开发者」，右键 →「打开」，或在终端执行 <code>chmod +x MacKZ-安装.command</code>。';
+});
+$('copyCmd').addEventListener('click', () => copy(INSTALL_CMD, '已复制安装命令：把 /path/to/MacKZ 换成你的实际目录'));
+$('copyUninstall').addEventListener('click', () => copy(UNINSTALL_CMD, '已复制卸载命令'));
+function copy(text, tip) {
+  navigator.clipboard?.writeText(text).then(
+    () => { $('installInfo').innerHTML = tip + '<br><code>' + text + '</code>'; },
+    () => { $('installInfo').innerHTML = '复制失败，请手动复制：<br><code>' + text + '</code>'; }
+  );
+}
+</script>
+</body>
+</html>
