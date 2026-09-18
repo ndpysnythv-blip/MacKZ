@@ -17,7 +17,9 @@ MACOS_MIN="${MACOS_MIN:-14.0}"
 ARCH="${ARCH:-$(uname -m)}"
 SOURCES=("$ROOT"/Sources/MacKZ/*.swift)
 
-echo "==> MacKZ build.sh v$BUILD_SCRIPT_VERSION（arch=$ARCH, min=macOS $MACOS_MIN）"
+# 注意：变量一律写成 ${VAR} 形式。macOS 自带 bash 3.2 在非 UTF-8 locale 下，
+# 会把紧跟变量名之后的中文（多字节）字符字节吞进变量名，导致 "unbound variable"。
+echo "==> MacKZ build.sh v${BUILD_SCRIPT_VERSION} （arch=${ARCH}, min=macOS ${MACOS_MIN}）"
 
 # ---------- 环境检查 ----------
 if [ "$(uname -s)" != "Darwin" ]; then

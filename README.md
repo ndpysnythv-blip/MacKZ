@@ -181,6 +181,11 @@ launchctl load ~/Library/LaunchAgents/com.mackz.plugin.plist
 
 ## 10. 常见问题
 
+**Q：脚本报 `MACOS_MIN: unbound variable`（变量名后面还带个乱码字符）？**
+macOS 自带 bash 3.2 的已知坑：`$VAR` 后面紧跟中文（多字节）字符时，这些字节会被吞进变量名。
+本项目脚本已全部改用 `${VAR}` 花括号写法，`git pull` 更新即可解决。
+
+
 | 现象 | 原因与解决 |
 | --- | --- |
 | 菜单栏显示“未检测到铰链角度传感器” | 机型无该传感器（Intel 常见）；或产品名不匹配。跑「传感器探针」，把报告里角度传感器的 `usagePage/usage/eventType/eventField` 与 `productNameContains` 填进配置（产品名不确定就把 `productNameContains` 设为 `""` 走自动挑选） |
