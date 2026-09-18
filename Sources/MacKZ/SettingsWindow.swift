@@ -33,6 +33,12 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     var onSetSleepDisabled: ((Bool) -> Void)?
     /// 手机遥控信息：是否启用、访问地址、运行状态
     var remoteInfoProvider: (() -> (enabled: Bool, url: String, status: String))?
+    /// 重新检测手机遥控连通性（重跑本机 + 局域网自检）
+    var onRecheckRemote: (() -> Void)?
+    /// 打开「系统设置 → 隐私与安全性 → 本地网络」（不授权手机就连不上）
+    var onOpenLocalNetwork: (() -> Void)?
+    /// 打开官网介绍页
+    var onOpenHomepage: (() -> Void)?
     /// 实时状态拉取：角度 / 阶段 / 屏幕录制权限
     var statusProvider: (() -> (angle: String, phase: String, capture: String))?
 
@@ -168,7 +174,9 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         let remoteTip = NSTextField(wrappingLabelWithString:
             "手机与 Mac 连同一个 Wi-Fi，用手机浏览器打开上面的地址，即可远程控制折叠动画（合上 / 打开 / 播放一次 / 拖动进度），适合演示给别人看。\n"
             + "地址中的 t=xxxx 是本次随机生成的访问口令，只在局域网内有效，重启插件后会重新生成。\n"
-            + "地址是 https:// 开头（本机自签证书）：手机首次打开会提示「证书不受信任」，点「显示详细信息 → 继续访问」即可。")
+            + "地址是 https:// 开头（本机自签证书）：手机首次打开会提示「证书不受信任」，点「显示详细信息 → 继续访问」即可。\n"
+            + "手机打不开时先点「重新检测连接」：状态行会直接告诉你卡在哪一段 —— 本机正常但手机连不上，"
+            + "几乎都是 macOS 的「本地网络」权限没给（点右边按钮去开启），或者当前 Wi-Fi 开了「访客网络」隔断设备互访。")
         remoteTip.font = .systemFont(ofSize: 11)
         remoteTip.textColor = .tertiaryLabelColor
         remoteTip.preferredMaxLayoutWidth = 520
@@ -186,6 +194,8 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             makeRow(views: [makeButton("复制链接", #selector(copyRemoteURL)),
                             makeButton("在本机打开", #selector(openRemoteURL)),
                             makeButton("刷新地址", #selector(refreshRemoteURL))]),
+            makeRow(views: [makeButton("重新检测连接", #selector(recheckRemote)),
+                            makeButton("打开本地网络设置", #selector(openLocalNetwork))]),
             switchRow("启用手机遥控", \.remoteControl),
             switchRow("允许手机陀螺仪接管角度", \.phoneGyro),
             remoteTip,
@@ -298,6 +308,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
                             makeButton("放弃修改并重载", #selector(reloadFromDisk)),
                             makeButton("传感器探针", #selector(probe)),
                             makeButton("检查更新", #selector(checkUpdate)),
+                            makeButton("打开官网", #selector(openHomepage)),
                             makeButton("保存并应用", #selector(apply), emphasized: true)])
         ]))
     }
@@ -610,6 +621,15 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         guard let text = remoteInfoProvider?().url, let url = URL(string: text) else { return }
         NSWorkspace.shared.open(url)
     }
+
+    /// 重新跑一次手机遥控连通性自检（结果由 remoteInfoProvider 的 status 回显）
+    @objc private func recheckRemote() { onRecheckRemote?() }
+
+    /// 打开「系统设置 → 隐私与安全性 → 本地网络」
+    @objc private func openLocalNetwork() { onOpenLocalNetwork?() }
+
+    /// 打开官网介绍页
+    @objc private func openHomepage() { onOpenHomepage?() }
 
     @objc private func refreshRemoteURL() { refreshRemoteInfo() }
 

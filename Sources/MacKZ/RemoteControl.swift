@@ -54,34 +54,48 @@ final class RemoteControl {
         self.port = port
         // 每次启动换一个口令，重启插件后旧链接自动失效
         token = String(UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(6)).lowercased()
+        startListener(secure: true)      // 先试 HTTPS，自检不通过会自动回退 HTTP
+    }
 
+    /// 重新自检一次（设置面板「重新检测连接」）。不改口令，手机上已打开的链接继续有效。
+    func recheck() {
+        guard isRunning else { return }
+        onStatus?("正在自检…")
+        runSelfCheck()
+    }
+
+    /// 起监听。
+    /// - Parameter secure: true 时优先用自签证书起 HTTPS（手机陀螺仪需要安全上下文），
+    ///   拿不到证书或自检不通过都会落到 HTTP。
+    private func startListener(secure: Bool) {
         guard let nwPort = NWEndpoint.Port(rawValue: port) else {
             onStatus?("端口不合法（\(port)）")
             return
         }
+        var parameters = NWParameters.tcp
+        var usingTLS = false
+        if secure, let host = Self.localIPAddress(), let identity = RemoteTLS.identity(for: host) {
+            let tls = NWProtocolTLS.Options()
+            sec_protocol_options_set_local_identity(tls.securityProtocolOptions, identity)
+            sec_protocol_options_set_min_tls_protocol_version(tls.securityProtocolOptions, .TLSv12)
+            parameters = NWParameters(tls: tls, tcp: NWProtocolTCP.Options())
+            usingTLS = true
+        }
+        parameters.allowLocalEndpointReuse = true
+        isSecure = usingTLS
+
         do {
-            // 手机陀螺仪需要安全上下文：能拿到自签证书就用 HTTPS，否则退回 HTTP（遥控按钮仍可用）
-            let parameters: NWParameters
-            if let host = Self.localIPAddress(), let identity = RemoteTLS.identity(for: host) {
-                let tls = NWProtocolTLS.Options()
-                sec_protocol_options_set_local_identity(tls.securityProtocolOptions, identity)
-                sec_protocol_options_set_min_tls_protocol_version(tls.securityProtocolOptions, .TLSv12)
-                parameters = NWParameters(tls: tls, tcp: NWProtocolTCP.Options())
-                isSecure = true
-            } else {
-                parameters = NWParameters.tcp
-                isSecure = false
-            }
-            parameters.allowLocalEndpointReuse = true
             let listener = try NWListener(using: parameters, on: nwPort)
             listener.newConnectionHandler = { [weak self] connection in self?.handle(connection) }
             listener.stateUpdateHandler = { [weak self] state in
                 DispatchQueue.main.async {
+                    guard let self else { return }
                     switch state {
                     case .ready:
-                        self?.onStatus?("监听中，等待手机连接")
+                        self.onStatus?(usingTLS ? "HTTPS 监听中，正在自检…" : "监听中，正在自检…")
+                        self.runSelfCheck()
                     case .failed(let error):
-                        self?.onStatus?("启动失败：\(error.localizedDescription)")
+                        self.onStatus?("启动失败：\(error.localizedDescription)")
                     default:
                         break
                     }
@@ -96,10 +110,78 @@ final class RemoteControl {
     }
 
     func stop() {
-        listener?.cancel()
-        listener = nil
+        stopListenerOnly()
         token = ""
         isSecure = false
+    }
+
+    /// 只停监听、保留口令（HTTPS 自检失败降级回 HTTP 时用）
+    private func stopListenerOnly() {
+        listener?.cancel()
+        listener = nil
+    }
+
+    // MARK: - 连通性自检
+
+    /// 启动 / 重检时主动模拟一次「手机访问」。
+    ///
+    /// 起因：手机端报「打不开该网页，因为已丢失网络连接」时，Mac 这边完全看不出异常，
+    /// 所以这里把两段路径都验一遍，并把结论直接写进设置面板的状态行：
+    ///  1) 回环（127.0.0.1）→ 验证监听与 TLS 握手真的可用；HTTPS 不通过就自动降级 HTTP；
+    ///  2) 局域网 IP → 验证手机那条路径通不通（这一步也会触发 macOS 的「本地网络」权限询问）。
+    private func runSelfCheck() {
+        let secureNow = isSecure
+        probe(host: "127.0.0.1") { [weak self] loopbackOK in
+            guard let self else { return }
+            guard !(secureNow && !loopbackOK) else {
+                // HTTPS 在本机都握不上手，继续用下去只会让手机连不上，直接回退
+                NSLog("[MacKZ] HTTPS 自检未通过，自动回退 HTTP")
+                self.stopListenerOnly()
+                self.isSecure = false
+                self.onStatus?("HTTPS 自检未通过，已回退 HTTP（仅手机陀螺仪需要 HTTPS）")
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+                    self?.startListener(secure: false)
+                }
+                return
+            }
+            guard let ip = RemoteControl.localIPAddress() else {
+                self.reportSelfCheck(loopbackOK: loopbackOK, lanOK: false)
+                return
+            }
+            self.probe(host: ip) { [weak self] lanOK in
+                self?.reportSelfCheck(loopbackOK: loopbackOK, lanOK: lanOK)
+            }
+        }
+    }
+
+    /// 自检结论：把「哪一段不通」直接写进设置面板的状态行
+    private func reportSelfCheck(loopbackOK: Bool, lanOK: Bool) {
+        if loopbackOK, lanOK {
+            onStatus?("已就绪：手机可直接打开上面的地址")
+        } else if loopbackOK {
+            onStatus?("本机正常，手机连不上：请在「系统设置 → 隐私与安全性 → 本地网络」里允许 MacKZ；"
+                      + "并确认手机与 Mac 在同一 Wi-Fi（部分路由器的访客网络会隔断设备互访）")
+        } else {
+            onStatus?("监听异常：建议换一个端口（高级设置 → 手机遥控端口）后点「重新检测」")
+        }
+    }
+
+    /// 向指定主机发一次 `GET /`，能拿到 200 就认为这条路径通。
+    /// 只做连通性判断，不读取响应内容。
+    private func probe(host: String, completion: @escaping (Bool) -> Void) {
+        guard let url = URL(string: "\(isSecure ? "https" : "http")://\(host):\(port)/") else {
+            completion(false)
+            return
+        }
+        let config = URLSessionConfiguration.ephemeral
+        config.timeoutIntervalForRequest = 4
+        config.waitsForConnectivity = false
+        let session = URLSession(configuration: config, delegate: SelfSignedTrustDelegate(), delegateQueue: nil)
+        session.dataTask(with: url) { _, response, error in
+            session.finishTasksAndInvalidate()
+            let ok = error == nil && (response as? HTTPURLResponse)?.statusCode == 200
+            DispatchQueue.main.async { completion(ok) }
+        }.resume()
     }
 
     // MARK: - HTTP
@@ -454,5 +536,21 @@ final class RemoteControl {
         </body>
         </html>
         """
+    }
+}
+
+/// 自检专用的 TLS 信任代理：接受本机自签证书。
+/// 只用于「Mac 自己访问自己」的连通性探测，不会修改系统任何信任设置，
+/// 也不影响手机浏览器上看到的证书提示（手机上仍需手动「继续访问」）。
+private final class SelfSignedTrustDelegate: NSObject, URLSessionDelegate {
+
+    func urlSession(_ session: URLSession, didReceive challenge: URLAuthenticationChallenge,
+                    completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
+        guard challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
+              let trust = challenge.protectionSpace.serverTrust else {
+            completionHandler(.performDefaultHandling, nil)
+            return
+        }
+        completionHandler(.useCredential, URLCredential(trust: trust))
     }
 }

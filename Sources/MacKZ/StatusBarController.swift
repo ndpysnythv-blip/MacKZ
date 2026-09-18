@@ -16,6 +16,8 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     var onRepairCapture: (() -> Void)?
     var onDemo: (() -> Void)?
     var onCheckUpdate: (() -> Void)?
+    /// 打开官网介绍页（kdxzhx.top/mackz）
+    var onOpenHomepage: (() -> Void)?
     var onQuit: (() -> Void)?
 
     /// 弱引用引擎，仅用于菜单里展示实时状态
@@ -44,8 +46,8 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         NSLog("[MacKZ] 菜单栏图标已就绪")
     }
 
-    /// 菜单栏图标尺寸（pt）。比系统常规的 18 略大一点，视觉更醒目。
-    private static let menuBarIconPointSize: CGFloat = 20
+    /// 菜单栏图标尺寸（pt）。取系统常规的 18，避免比旁边系统图标显大。
+    private static let menuBarIconPointSize: CGFloat = 18
 
     /// 菜单栏图标：优先使用随包分发的 logo（作者 KDXZHX），取不到再回退到代码绘制的「KZ」字样，
     /// 保证任何情况下图标都不会变成空白。
@@ -261,6 +263,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         menu.addItem(makeItem("传感器探针（生成诊断报告）", #selector(probe)))
         menu.addItem(.separator())
         menu.addItem(makeItem("检查更新…", #selector(checkUpdate)))
+        menu.addItem(makeItem("MacKZ 官网", #selector(openHomepage)))
         menu.addItem(makeItem("退出 MacKZ", #selector(quit)))
 
         menu.delegate = self
@@ -325,5 +328,6 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     @objc private func repairCapture() { onRepairCapture?() }
     @objc private func demo() { onDemo?() }
     @objc private func checkUpdate() { onCheckUpdate?() }
+    @objc private func openHomepage() { onOpenHomepage?() }
     @objc private func quit() { onQuit?() }
 }

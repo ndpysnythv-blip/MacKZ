@@ -54,6 +54,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         status.onRepairCapture = { [weak self] in self?.repairCapturePermission() }
         status.onDemo = { [weak self] in self?.engine.playDemo() }
         status.onCheckUpdate = { [weak self] in self?.checkUpdate() }
+        status.onOpenHomepage = { NSWorkspace.shared.open(UpdateChecker.homepageURL) }
         status.onQuit = { NSApp.terminate(nil) }
 
         // ---------- 可视化设置面板 ----------
@@ -74,6 +75,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.engine.playSingle(to: 0.0, duration: 2.2, replayIfFinished: true)
         }
         settings.onSetSleepDisabled = { [weak self] disabled in self?.setSleepDisabled(disabled) }
+        settings.onRecheckRemote = { [weak self] in self?.remote.recheck() }
+        settings.onOpenLocalNetwork = { AppDelegate.openLocalNetworkSettings() }
+        settings.onOpenHomepage = { NSWorkspace.shared.open(UpdateChecker.homepageURL) }
         settings.statusProvider = { [weak self] in
             guard let self else { return (angle: "--", phase: "--", capture: "未知") }
             let angle = self.engine.lastAngleDeg.map { String(format: "%.1f°", $0) } ?? "--"
@@ -357,7 +361,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         alert.addButton(withTitle: "立即更新并重启")
-        alert.addButton(withTitle: "打开发布页")
+        alert.addButton(withTitle: "打开官网")
+        alert.addButton(withTitle: "查看更新说明")
         alert.addButton(withTitle: "稍后")
 
         // 本应用没有 Dock 图标，弹窗可能被其它窗口挡住，这里强制置顶
@@ -365,6 +370,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .alertFirstButtonReturn:
             beginUpdate(release)
         case .alertSecondButtonReturn:
+            NSWorkspace.shared.open(UpdateChecker.homepageURL)
+        case .alertThirdButtonReturn:
             NSWorkspace.shared.open(release.pageURL)
         default:
             break
@@ -434,7 +441,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         GitHub 的更新资源域名在部分网络环境下不稳定。可以改用终端命令安装（走 git 拉源码，通常更容易连通）：
         """
         alert.addButton(withTitle: "复制终端命令")
-        alert.addButton(withTitle: "打开发布页")
+        alert.addButton(withTitle: "打开官网")
         alert.addButton(withTitle: "关闭")
         switch present(alert) {
         case .alertFirstButtonReturn:
@@ -442,7 +449,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSPasteboard.general.setString(UpdateChecker.terminalInstallCommand, forType: .string)
             notify("命令已复制", "粘贴到「终端」里执行，即可安装最新版本。")
         case .alertSecondButtonReturn:
-            NSWorkspace.shared.open(release.pageURL)
+            NSWorkspace.shared.open(UpdateChecker.homepageURL)
         default:
             break
         }
@@ -528,6 +535,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// 打开「系统设置 → 隐私与安全性 → 屏幕录制」面板
     private func openPrivacySettings() {
         guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") else { return }
+        NSWorkspace.shared.open(url)
+    }
+
+    /// 打开「系统设置 → 隐私与安全性 → 本地网络」。
+    /// macOS 15 起监听/访问局域网需要用户授权；没授权时手机与 Mac 明明在同一 Wi-Fi，
+    /// 手机却打不开遥控页面（表现为「已丢失网络连接」）。
+    private static func openLocalNetworkSettings() {
+        guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_LocalNetwork") else { return }
         NSWorkspace.shared.open(url)
     }
 

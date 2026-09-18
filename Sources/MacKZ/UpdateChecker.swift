@@ -11,6 +11,9 @@ enum UpdateChecker {
     /// 仓库标识（owner/repo）
     static let repository = "ndpysnythv-blip/MacKZ"
 
+    /// 产品官网（介绍页）：插件内所有「官网」入口统一指向这里
+    static let homepageURL = URL(string: "https://kdxzhx.top/mackz")!
+
     /// 一个可用的新版本
     struct Release {
         let version: String      // 规范化版本号，如 "1.3.1"
