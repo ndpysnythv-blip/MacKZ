@@ -24,6 +24,8 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let menu = NSMenu()
     private let stateItem = NSMenuItem(title: "状态：待机", action: nil, keyEquivalent: "")
+    /// 版本号直接显示在菜单里：方便确认当前跑的到底是新装版本还是旧版本
+    private let versionItem = NSMenuItem(title: "MacKZ", action: nil, keyEquivalent: "")
     private let angleItem = NSMenuItem(title: "铰链角度：--", action: nil, keyEquivalent: "")
     private let sensorItem = NSMenuItem(title: "传感器：未启动", action: nil, keyEquivalent: "")
     private let renderItem = NSMenuItem(title: "渲染：待机", action: nil, keyEquivalent: "")
@@ -66,7 +68,9 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     // MARK: - 菜单构建
 
     private func buildMenu() {
-        for item in [stateItem, angleItem, sensorItem, renderItem] { item.isEnabled = false }
+        for item in [versionItem, stateItem, angleItem, sensorItem, renderItem] { item.isEnabled = false }
+        versionItem.title = "MacKZ v\(UpdateChecker.currentVersion)"
+        menu.addItem(versionItem)
         menu.addItem(stateItem)
         menu.addItem(angleItem)
         menu.addItem(sensorItem)

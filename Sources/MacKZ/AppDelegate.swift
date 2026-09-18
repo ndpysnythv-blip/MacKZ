@@ -233,9 +233,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         alert.addButton(withTitle: "稍后")
 
         // 本应用没有 Dock 图标，弹窗可能被其它窗口挡住，这里强制置顶
-        alert.window.level = NSWindow.Level(rawValue: 1400)
-        NSApp.activate(ignoringOtherApps: true)
-        switch alert.runModal() {
+        switch present(alert) {
         case .alertFirstButtonReturn:
             beginUpdate(release)
         case .alertSecondButtonReturn:
@@ -310,7 +308,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         alert.addButton(withTitle: "复制终端命令")
         alert.addButton(withTitle: "打开发布页")
         alert.addButton(withTitle: "关闭")
-        switch alert.runModal() {
+        switch present(alert) {
         case .alertFirstButtonReturn:
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(UpdateChecker.terminalInstallCommand, forType: .string)
@@ -368,7 +366,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         alert.addButton(withTitle: "修复权限")
         alert.addButton(withTitle: "打开系统设置")
         alert.addButton(withTitle: "稍后")
-        switch alert.runModal() {
+        switch present(alert) {
         case .alertFirstButtonReturn:
             repairCapturePermission()
         case .alertSecondButtonReturn:
@@ -418,12 +416,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.terminate(nil)
     }
 
-    /// 极简提示（不激活其它窗口时用 NSAlert 会抢焦点，这里仅在需要时弹一次）
+    /// 统一配置弹窗：设置面板浮在 1200 层、动画覆盖层 999 层，
+    /// 普通 NSAlert 是默认层级会被它们压在下面（用户根本看不到），所以这里强制置顶并激活 App。
+    @discardableResult
+    private func present(_ alert: NSAlert) -> NSApplication.ModalResponse {
+        alert.window.level = NSWindow.Level(rawValue: 1400)
+        NSApp.activate(ignoringOtherApps: true)
+        return alert.runModal()
+    }
+
+    /// 极简提示（统一走 present，保证不会被设置面板/覆盖层挡住）
     private func notify(_ title: String, _ text: String) {
         let alert = NSAlert()
         alert.messageText = title
         alert.informativeText = text
         alert.addButton(withTitle: "好")
-        alert.runModal()
+        present(alert)
     }
 }
