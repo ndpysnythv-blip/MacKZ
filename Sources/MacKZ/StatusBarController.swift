@@ -44,27 +44,151 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         NSLog("[MacKZ] 菜单栏图标已就绪")
     }
 
+    /// 菜单栏图标尺寸（pt）。比系统常规的 18 略大一点，视觉更醒目。
+    private static let menuBarIconPointSize: CGFloat = 20
+
     /// 菜单栏图标：优先使用随包分发的 logo（作者 KDXZHX），取不到再回退到代码绘制的「KZ」字样，
     /// 保证任何情况下图标都不会变成空白。
     static func makeMenuBarIcon() -> NSImage {
-        let size = NSSize(width: 18, height: 18)
-        return logoIcon(size: size) ?? drawnIcon(size: size)
+        let size = NSSize(width: menuBarIconPointSize, height: menuBarIconPointSize)
+        return logoIcon(pointSize: menuBarIconPointSize) ?? drawnIcon(size: size)
     }
 
-    /// 从 App 包内加载 logo 并缩放为菜单栏尺寸。
-    /// 不设 isTemplate：logo 本身有配色，转成模板会只剩一个黑色轮廓，看不出是 logo。
-    private static func logoIcon(size: NSSize) -> NSImage? {
+    /// 把 logo 处理成适合菜单栏的图标。
+    /// 原图是「白底 + 深色 KZ 图形」且四周留白很大（图形只占约 55%），直接缩放放进菜单栏
+    /// 会是一个显眼的小白方块，所以这里做三件事：
+    ///  1) 探测图形外接框、裁掉四周留白 → 同样尺寸下图形视觉上放大约 1.8 倍；
+    ///  2) 逐像素把白底变成透明 → 白边彻底消失，只剩深色字形；
+    ///  3) 设为模板图 → 浅色菜单栏显示黑色字形，深色菜单栏由系统自动反白，两种主题都清晰。
+    private static func logoIcon(pointSize: CGFloat) -> NSImage? {
         let urls = ["jpg", "png"].compactMap { Bundle.main.url(forResource: "logo", withExtension: $0) }
-        guard let url = urls.first, let source = NSImage(contentsOf: url) else { return nil }
+        guard let url = urls.first,
+              let source = NSImage(contentsOf: url),
+              let cgSource = source.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return nil }
 
-        let image = NSImage(size: size)
+        let probe = grayscaleProbe(of: cgSource)
+        // 白底占比过低说明原图不是「白底深色图形」结构（例如彩色 logo），
+        // 这时强行去掉白色只会毁掉图形，直接原样缩放使用即可。
+        guard let probe, probe.whiteRatio > 0.15 else { return plainIcon(cgSource, pointSize: pointSize) }
+
+        // 裁到图形外接框，并各边内缩 3% 留一点呼吸空间，避免图形顶满整个图标框
+        let inset = 0.03
+        let box = probe.box.insetBy(dx: probe.box.width * inset, dy: probe.box.height * inset)
+        let width = CGFloat(cgSource.width), height = CGFloat(cgSource.height)
+        let crop = CGRect(x: box.minX * width, y: box.minY * height,
+                          width: box.width * width, height: box.height * height).integral
+        guard crop.width >= 1, crop.height >= 1, let cropped = cgSource.cropping(to: crop) else {
+            return plainIcon(cgSource, pointSize: pointSize)
+        }
+
+        // 2x 像素绘制，Retina 菜单栏下不发虚
+        let pixels = Int((pointSize * 2).rounded())
+        guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: pixels, pixelsHigh: pixels,
+                                         bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
+                                         isPlanar: false, colorSpaceName: .deviceRGB,
+                                         bytesPerRow: 0, bitsPerPixel: 0),
+              let context = NSGraphicsContext(bitmapImageRep: rep) else { return nil }
+
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = context
+        context.cgContext.interpolationQuality = .high
+        context.cgContext.draw(cropped, in: aspectFitRect(for: cropped, in: pixels))   // 等比居中，不拉伸变形
+        NSGraphicsContext.restoreGraphicsState()
+
+        makeWhiteTransparent(in: rep)
+        let image = NSImage(size: NSSize(width: pointSize, height: pointSize))
+        image.addRepresentation(rep)
+        image.isTemplate = true
+        return image
+    }
+
+    /// 非白底 logo（彩色图）的兜底：原样等比缩放到菜单栏尺寸，不做透明化处理。
+    private static func plainIcon(_ cgImage: CGImage, pointSize: CGFloat) -> NSImage? {
+        let image = NSImage(size: NSSize(width: pointSize, height: pointSize))
         image.lockFocus()
-        let rect = NSRect(origin: .zero, size: size)
-        // 圆角裁切：方形 logo 直接进菜单栏会显得很硬
-        NSBezierPath(roundedRect: rect, xRadius: 4, yRadius: 4).addClip()
-        source.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1.0)
+        NSGraphicsContext.current?.imageInterpolation = .high
+        let rect = NSRect(x: 0, y: 0, width: pointSize, height: pointSize)
+        NSImage(cgImage: cgImage, size: rect.size).draw(in: rect)
         image.unlockFocus()
         return image
+    }
+
+    /// 等比缩放并居中（保持图形长宽比，避免被拉扁）
+    private static func aspectFitRect(for image: CGImage, in side: Int) -> CGRect {
+        let length = CGFloat(side)
+        let aspect = CGFloat(image.width) / CGFloat(image.height)
+        if aspect > 1 {
+            let height = length / aspect
+            return CGRect(x: 0, y: (length - height) / 2, width: length, height: height)
+        }
+        if aspect < 1 {
+            let width = length * aspect
+            return CGRect(x: (length - width) / 2, y: 0, width: width, height: length)
+        }
+        return CGRect(x: 0, y: 0, width: length, height: length)
+    }
+
+    /// 灰度取样结果：非白内容的外接框 + 白底像素占比
+    private struct LogoProbe {
+        let box: CGRect        // 归一化坐标（左上原点，0~1），与 CGImage.cropping 的坐标系一致
+        let whiteRatio: Double
+    }
+
+    /// 把图缩到 128×128 灰度后逐像素分析，找出图形的外接框与白底占比。
+    /// 采样尺寸很小，整段开销可忽略；不依赖任何第三方图像库。
+    private static func grayscaleProbe(of cgImage: CGImage) -> LogoProbe? {
+        let side = 128
+        let whiteThreshold = 235     // 比这更亮视为白底（JPEG 白底会有轻微噪点，阈值不能卡太死）
+        var pixels = [UInt8](repeating: 255, count: side * side)
+        let drawn = pixels.withUnsafeMutableBytes { raw -> Bool in
+            guard let context = CGContext(data: raw.baseAddress, width: side, height: side,
+                                          bitsPerComponent: 8, bytesPerRow: side,
+                                          space: CGColorSpaceCreateDeviceGray(),
+                                          bitmapInfo: CGImageAlphaInfo.none.rawValue) else { return false }
+            context.interpolationQuality = .high
+            context.draw(cgImage, in: CGRect(x: 0, y: 0, width: side, height: side))
+            return true
+        }
+        guard drawn else { return nil }
+
+        var minX = side, minY = side, maxX = -1, maxY = -1, white = 0
+        for y in 0..<side {
+            let row = y * side
+            for x in 0..<side {
+                if Int(pixels[row + x]) < whiteThreshold {
+                    if x < minX { minX = x }
+                    if x > maxX { maxX = x }
+                    if y < minY { minY = y }
+                    if y > maxY { maxY = y }
+                } else {
+                    white += 1
+                }
+            }
+        }
+        guard maxX >= minX, maxY >= minY else { return nil }
+
+        let box = CGRect(x: CGFloat(minX) / CGFloat(side), y: CGFloat(minY) / CGFloat(side),
+                         width: CGFloat(maxX - minX + 1) / CGFloat(side),
+                         height: CGFloat(maxY - minY + 1) / CGFloat(side))
+        return LogoProbe(box: box, whiteRatio: Double(white) / Double(side * side))
+    }
+
+    /// 把位图里的白底刷成透明：alpha = 255 − 亮度，RGB 统一涂黑（模板图只看 alpha）。
+    /// 用亮度差当 alpha，图形边缘会保留自然的半透明过渡，不会切出硬锯齿。
+    private static func makeWhiteTransparent(in rep: NSBitmapImageRep) {
+        guard let data = rep.bitmapData else { return }
+        for y in 0..<rep.pixelsHigh {
+            let row = data + y * rep.bytesPerRow
+            for x in 0..<rep.pixelsWide {
+                let pixel = row + x * 4
+                let luminance = (Int(pixel[0]) * 299 + Int(pixel[1]) * 587 + Int(pixel[2]) * 114) / 1000
+                let alpha = 255 - luminance
+                pixel[0] = 0
+                pixel[1] = 0
+                pixel[2] = 0
+                pixel[3] = alpha < 24 ? 0 : UInt8(alpha)   // 24 以下视为白底噪点，直接全透明
+            }
+        }
     }
 
     /// 用代码绘制菜单栏图标（KZ 字样）。
