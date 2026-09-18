@@ -23,6 +23,8 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     var onCheckUpdate: (() -> Void)?
     /// 修复「屏幕录制」授权（清除更新后残留的过期记录）
     var onRepairCapture: (() -> Void)?
+    /// 手动拖动预览：参数为折叠进度 0~1
+    var onManualProgress: ((Double) -> Void)?
     /// 实时状态拉取：角度 / 阶段 / 屏幕录制权限
     var statusProvider: (() -> (angle: String, phase: String, capture: String))?
 
@@ -33,6 +35,9 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     private var statusLabel: NSTextField?
     private var captureLabel: NSTextField?
     private var enabledCheck: NSButton?
+    /// 手动预览滑块与数值标签（复位时要同步刷新）
+    private var manualSlider: NSSlider?
+    private var manualValueLabel: NSTextField?
     private var timer: Timer?
     /// NSControl.target 是弱引用，这里强引用住所有回调持有者，防止被释放
     private var handlers: [NSObject] = []
@@ -70,6 +75,8 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         win.minSize = NSSize(width: 580, height: 420)
         win.delegate = self
         win.center()
+        // 浮在覆盖动画层之上，这样拖动滑块时设置面板不会被折叠动画盖住
+        win.level = NSWindow.Level(rawValue: 1200)
 
         // 滚动容器：内容高度可能超过窗口
         let scroll = NSScrollView()
@@ -175,6 +182,41 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             sliderRow("传感器采样率", \.sampleHz, 10...120, decimals: 0, suffix: " Hz"),
             sliderRow("角度平滑系数", \.smoothing, 0...0.95, decimals: 2, suffix: ""),
             switchRow("禁止被录屏/共享捕获", \.excludedFromCapture)
+        ]))
+
+        // ---------- 手动预览（没有铰链传感器的机型也能体验动画） ----------
+        let progressSlider = NSSlider(value: 1, minValue: 0, maxValue: 1, target: nil, action: nil)
+        progressSlider.isContinuous = true
+        progressSlider.translatesAutoresizingMaskIntoConstraints = false
+        progressSlider.widthAnchor.constraint(equalToConstant: 250).isActive = true
+        let progressValue = NSTextField(labelWithString: "100%")
+        progressValue.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
+        progressValue.textColor = .secondaryLabelColor
+        progressValue.alignment = .right
+        progressValue.translatesAutoresizingMaskIntoConstraints = false
+        progressValue.widthAnchor.constraint(equalToConstant: 76).isActive = true
+        manualSlider = progressSlider
+        manualValueLabel = progressValue
+
+        let progressHandler = SliderHandler { [weak self] v in
+            self?.onManualProgress?(v)
+            progressValue.stringValue = "\(Int(v * 100 + 0.5))%"
+        }
+        handlers.append(progressHandler)
+        progressSlider.target = progressHandler
+        progressSlider.action = #selector(SliderHandler.fire(_:))
+
+        let manualTip = NSTextField(wrappingLabelWithString:
+            "拖动滑块即可实时预览 Duo Continuity 折叠效果：0% = 完全合上，100% = 完全展开（正常画面）。")
+        manualTip.font = .systemFont(ofSize: 11)
+        manualTip.textColor = .tertiaryLabelColor
+        manualTip.preferredMaxLayoutWidth = 520
+
+        stack.addArrangedSubview(sectionBox(title: "手动预览（没有铰链传感器的机型也能体验）", rows: [
+            makeRow(title: "折叠进度", views: [progressSlider, progressValue]),
+            manualTip,
+            makeRow(views: [makeButton("播放一次开合", #selector(demo)),
+                            makeButton("复位（完全展开）", #selector(resetManual))])
         ]))
 
         // ---------- 更新 ----------
@@ -388,6 +430,13 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     }
 
     @objc private func repairCapture() { onRepairCapture?() }
+
+    /// 复位到完全展开：关闭覆盖层，回到正常桌面画面
+    @objc private func resetManual() {
+        onManualProgress?(1.0)
+        manualSlider?.doubleValue = 1
+        manualValueLabel?.stringValue = "100%"
+    }
 
     @objc private func openPrivacySettings() {
         // 直达「隐私与安全性 → 屏幕录制」面板

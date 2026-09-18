@@ -56,6 +56,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settings.onCheckUpdate = { [weak self] in self?.checkUpdate() }
         settings.onRequestCapture = { [weak self] in self?.requestCapturePermission() }
         settings.onRepairCapture = { [weak self] in self?.repairCapturePermission() }
+        settings.onManualProgress = { [weak self] value in self?.engine.setManualProgress(value) }
         settings.statusProvider = { [weak self] in
             guard let self else { return (angle: "--", phase: "--", capture: "未知") }
             let angle = self.engine.lastAngleDeg.map { String(format: "%.1f°", $0) } ?? "--"

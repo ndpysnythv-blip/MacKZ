@@ -249,6 +249,27 @@ final class HingeAnimationEngine {
     private var singleFrom: Double = 0
     private var singleTo: Double = 1
 
+    // MARK: - 手动预览
+
+    /// 手动设定折叠进度并立即渲染（供没有铰链角度传感器的机型手动拖动体验）。
+    /// 调用后覆盖层会停留在该进度上，直到再次调用或复位。
+    func setManualProgress(_ value: Double) {
+        guard config.enabled else { return }
+        cancelCatchUp()
+        demoLink?.invalidate()
+        demoLink = nil
+        phase = .tracking                       // phase != .idle → 覆盖层保持显示
+        sequenceTarget = nil
+        progress = min(max(value, 0), 1)
+        lastAngleDeg = config.closedAngle + progress * (config.openAngle - config.closedAngle)
+        emit()
+    }
+
+    /// 结束手动预览：回到“完全展开”的正常画面
+    func endManualPreview() {
+        setManualProgress(1.0)
+    }
+
     // MARK: - 单向过渡（无铰链传感器机型的替代触发）
 
     /// 播放一次单向过渡：从当前进度平滑走到 target（0 = 完全合上，1 = 完全展开）。
