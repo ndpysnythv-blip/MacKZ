@@ -50,15 +50,18 @@ final class RemoteControl {
     // MARK: - 启停
 
     /// 启动监听。
-    /// - Parameter https: 是否用 HTTPS 起服务。手机陀螺仪需要安全上下文（https），
-    ///   但自签证书在手机上一定会先弹一次「证书不受信任」，兼容性不如 HTTP，
-    ///   所以默认走 HTTP，由设置面板的「手机陀螺仪铰链模式」开关决定。
-    func start(port: UInt16, https: Bool) {
+    ///
+    /// 固定优先用 HTTPS：
+    /// 1) 手机陀螺仪需要安全上下文，只有 https 才读得到运动传感器；
+    /// 2) 更重要的是 Safari 会把访问过的地址记成「必须 HTTPS」——之后再用 http 打开会被直接拦下，
+    ///    报错「导览失败，因为要求是针对已启用『仅限 HTTPS』的 HTTP URL」。
+    /// 拿不到可用证书时会自动回退 HTTP，并在状态行说明原因。
+    func start(port: UInt16) {
         stop()
         self.port = port
         // 每次启动换一个口令，重启插件后旧链接自动失效
         token = String(UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(6)).lowercased()
-        startListener(secure: https)
+        startListener(secure: true)
     }
 
     /// 起监听。
@@ -126,16 +129,24 @@ final class RemoteControl {
     /// 所以这里把两段路径都验一遍，并把结论直接写进设置面板的状态行：
     ///  1) 回环（127.0.0.1）→ 验证监听与 TLS 握手真的可用；HTTPS 不通过就自动降级 HTTP；
     ///  2) 局域网 IP → 验证手机那条路径通不通（这一步也会触发 macOS 的「本地网络」权限询问）。
-    private func runSelfCheck() {
+    private func runSelfCheck(attempt: Int = 1) {
         let secureNow = isSecure
         probe(host: "127.0.0.1") { [weak self] loopbackOK in
             guard let self else { return }
+            if secureNow, !loopbackOK, attempt < 2 {
+                // 刚起监听时首次 TLS 握手偶尔来不及，重试一次再决定要不要降级 ——
+                // 否则「本来能用的 HTTPS 被误降级成 HTTP」，手机端就会被 Safari 拦下
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
+                    self?.runSelfCheck(attempt: attempt + 1)
+                }
+                return
+            }
             guard !(secureNow && !loopbackOK) else {
                 // HTTPS 在本机都握不上手，继续用下去只会让手机连不上，直接回退
                 NSLog("[MacKZ] HTTPS 自检未通过，自动回退 HTTP")
                 self.stopListenerOnly()
                 self.isSecure = false
-                self.onStatus?("HTTPS 自检未通过，已回退 HTTP（仅手机陀螺仪需要 HTTPS）")
+                self.onStatus?("HTTPS 证书在本机不可用，已回退 HTTP；如果手机提示「仅限 HTTPS」，请在 Safari 设置 → 高级里关掉该选项")
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
                     self?.startListener(secure: false)
                 }
@@ -171,7 +182,7 @@ final class RemoteControl {
             return
         }
         let config = URLSessionConfiguration.ephemeral
-        config.timeoutIntervalForRequest = 4
+        config.timeoutIntervalForRequest = 6        // 刚起监听时握手可能偏慢，别把超时卡太死
         config.waitsForConnectivity = false
         let session = URLSession(configuration: config, delegate: SelfSignedTrustDelegate(), delegateQueue: nil)
         session.dataTask(with: url) { _, response, error in

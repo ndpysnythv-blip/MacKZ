@@ -31,15 +31,26 @@ enum RemoteTLS {
 
         let cachedHost = (try? String(contentsOf: hostStampURL, encoding: .utf8))?
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        if cachedHost != host || !FileManager.default.fileExists(atPath: p12URL.path) {
-            guard generateCertificate(for: host) else { return nil }
-        }
+        // 主机没变且旧证书还能用 → 直接复用，避免每次启动都跑 openssl
+        if cachedHost == host, let existing = loadIdentity() { return existing }
+
+        guard generateCertificate(for: host) else { return nil }
         return loadIdentity()
     }
 
     // MARK: - 生成自签证书
 
-    /// 生成自签证书并导出 p12，成功返回 true
+    /// PKCS#12 的几组加密参数，按兼容性从高到低依次尝试。
+    /// 不同 macOS / openssl 版本支持的算法不同，而 Security 框架只认它认得的那些 ——
+    /// 每导出一组就试着导入一次，导入成功才算数（导入失败会静默回退 HTTP，是「手机打不开」的常见原因）。
+    private static let p12Variants: [[String]] = [
+        ["-keypbe", "PBE-SHA1-3DES", "-certpbe", "PBE-SHA1-3DES", "-macalg", "sha1"],
+        ["-keypbe", "PBE-SHA1-3DES", "-certpbe", "PBE-SHA1-3DES"],
+        ["-legacy"],
+        [],
+    ]
+
+    /// 生成自签证书并导出「能被 Security 导入」的 p12，成功返回 true
     private static func generateCertificate(for host: String) -> Bool {
         let fm = FileManager.default
         // 0700：证书目录仅当前用户可读写
@@ -50,9 +61,12 @@ enum RemoteTLS {
         let certURL = directory.appendingPathComponent("cert.pem")
         let cnfURL = directory.appendingPathComponent("openssl.cnf")
 
-        // 纯数字/点 视为 IP，其余按域名写进 SAN
+        // 纯数字/点 视为 IP，其余按域名写进 SAN（Safari 要求 SAN 与访问地址匹配才允许「继续访问」）
         let isIP = host.range(of: #"^[0-9]+(\.[0-9]+){3}$"#, options: .regularExpression) != nil
         let san = isIP ? "IP:\(host),DNS:mackz.local" : "DNS:\(host),DNS:mackz.local"
+        // 证书扩展按「标准服务器证书」签发：
+        // CA:FALSE + keyUsage + extendedKeyUsage=serverAuth —— 少了 EKU 时 Apple 的 TLS 栈可能直接拒绝握手，
+        // 那样手机上只会看到「无法建立安全连接」，连证书警告页都出不来。
         let cnf = """
         [req]
         distinguished_name = dn
@@ -61,7 +75,9 @@ enum RemoteTLS {
         [dn]
         CN = MacKZ
         [v3]
-        basicConstraints = critical,CA:TRUE
+        basicConstraints = critical,CA:FALSE
+        keyUsage         = critical,digitalSignature,keyEncipherment
+        extendedKeyUsage = serverAuth
         subjectAltName   = \(san)
         """
         guard (try? cnf.write(to: cnfURL, atomically: true, encoding: .utf8)) != nil else { return false }
@@ -80,16 +96,18 @@ enum RemoteTLS {
             return false
         }
 
-        // 2) 导出 PKCS#12：Security 框架只认 p12。
-        //    先试 -legacy（传统加密，兼容性最好），老版本 openssl 不认该参数时再去掉重试。
-        let common = ["pkcs12", "-export", "-out", p12URL.path, "-inkey", keyURL.path,
-                      "-in", certURL.path, "-passout", "pass:\(passphrase)", "-name", "MacKZ"]
-        if runOpenSSL(common + ["-legacy"]) || runOpenSSL(common) {
-            guard (try? host.write(to: hostStampURL, atomically: true, encoding: .utf8)) != nil else { return false }
-            NSLog("[MacKZ] 已生成本地 HTTPS 自签证书（SAN: %@）", san)
+        // 2) 逐个参数组导出 p12，并以「Security 能否导入」作为成功判据
+        let base = ["pkcs12", "-export", "-out", p12URL.path, "-inkey", keyURL.path,
+                    "-in", certURL.path, "-passout", "pass:\(passphrase)", "-name", "MacKZ"]
+        for variant in p12Variants {
+            guard runOpenSSL(base + variant) else { continue }
+            guard loadIdentity() != nil else { continue }
+            _ = try? host.write(to: hostStampURL, atomically: true, encoding: .utf8)
+            NSLog("[MacKZ] 已生成本地 HTTPS 自签证书（SAN: %@，p12 参数: %@）",
+                  san, variant.isEmpty ? "默认" : variant.joined(separator: " "))
             return true
         }
-        NSLog("[MacKZ] 导出 PKCS#12 失败，手机遥控将回退到 HTTP")
+        NSLog("[MacKZ] PKCS#12 导出后无法被 Security 导入，手机遥控将回退到 HTTP")
         return false
     }
 

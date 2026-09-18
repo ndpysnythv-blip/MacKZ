@@ -117,7 +117,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         // 按配置启停手机遥控
         if config.remoteControl {
-            remote.start(port: UInt16(clamping: config.remoteControlPort), https: config.phoneGyro)
+            remote.start(port: UInt16(clamping: config.remoteControlPort))
         }
 
         // 传感器线程 -> 主线程（30Hz 级别的派发开销可忽略）
@@ -206,7 +206,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             settings.refreshRemoteInfo()
             return
         }
-        remote.start(port: UInt16(clamping: config.remoteControlPort), https: config.phoneGyro)
+        remote.start(port: UInt16(clamping: config.remoteControlPort))
         settings.refreshRemoteInfo()
     }
 
@@ -226,9 +226,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         status.setEnabledState(config.enabled)
 
-        // 手机遥控跟着配置热重启（开关/端口/是否 HTTPS 可能已改）
+        // 手机遥控跟着配置热重启（开关/端口可能已改）
         if config.remoteControl {
-            remote.start(port: UInt16(clamping: config.remoteControlPort), https: config.phoneGyro)
+            remote.start(port: UInt16(clamping: config.remoteControlPort))
         } else {
             remote.stop()
             remoteStatus = "未启动"

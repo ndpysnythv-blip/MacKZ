@@ -171,12 +171,15 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         remoteLabel = remoteState
         let remoteTip = NSTextField(wrappingLabelWithString:
             "手机与 Mac 连同一个 Wi-Fi，用手机浏览器打开上面的地址，即可远程控制折叠动画（合上 / 打开 / 播放一次 / 拖动进度）。\n"
+            + "服务用 HTTPS 起（本机自签证书）：手机首次打开会提示「证书不受信任」，点「显示详细信息 → 继续访问」即可。\n"
             + "地址里的 t=xxxx 是本次随机生成的口令，只在局域网内有效；换了 Wi-Fi 或 IP 变了，点「刷新地址」重新生成。\n\n"
             + "打不开时按顺序排查：\n"
-            + "① 手机和 Mac 是否在同一个 Wi-Fi（路由器的「访客网络」会隔断设备互访）；\n"
+            + "① 是否点过「继续访问」—— 自签证书必须手动放行一次，否则页面不会加载；\n"
             + "②「系统设置 → 网络 → 防火墙」是否拦住了 MacKZ 的传入连接；\n"
             + "③ macOS 15 起还需要在「隐私与安全性 → 本地网络」里允许 MacKZ；\n"
-            + "④ 开了「陀螺仪模式」后地址会变成 https，手机首次打开要点「显示详细信息 → 继续访问」。")
+            + "④ 手机和 Mac 是否在同一个 Wi-Fi（路由器的「访客网络」会隔断设备互访）；\n"
+            + "⑤ 若 Safari 报「已启用『仅限 HTTPS』」：该地址已被 Safari 记成必须 HTTPS，"
+            + "请改用面板上的 https 地址，或到「设置 → Safari → 高级」里关掉「仅限 HTTPS」。")
         remoteTip.font = .systemFont(ofSize: 11)
         remoteTip.textColor = .tertiaryLabelColor
         remoteTip.preferredMaxLayoutWidth = 500
@@ -186,7 +189,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             + "手机页面点「启用陀螺仪」并允许「运动与方向访问」，手机姿态角就会实时换算成屏幕开合角，"
             + "替代本机铰链传感器 —— 适合没有 Lid Angle Sensor 的机型。\n"
             + "首次使用请在合上屏幕时点一次「标定为完全合上」；手机锁屏或切到后台会自动交回本机传感器。\n"
-            + "读取运动传感器必须走 HTTPS，所以打开这个开关后地址会变成 https。")
+            + "读取运动传感器必须走 HTTPS —— 手机遥控服务固定用 HTTPS，正好满足这个要求。")
         gyroTip.font = .systemFont(ofSize: 11)
         gyroTip.textColor = .tertiaryLabelColor
         gyroTip.preferredMaxLayoutWidth = 500
@@ -200,7 +203,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             makeRow(views: [makeButton("复制链接", #selector(copyRemoteURL)),
                             makeButton("刷新地址", #selector(refreshRemoteURL))]),
             switchRow("启用手机遥控", \.remoteControl),
-            switchRow("陀螺仪模式（HTTPS）", \.phoneGyro),
+            switchRow("允许手机陀螺仪接管角度", \.phoneGyro),
             remoteHelp
         ]))
 
