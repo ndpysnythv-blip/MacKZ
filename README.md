@@ -63,19 +63,19 @@ open /Applications/MacKZ.app
 
 | 需求 | 实现位置 | 说明 |
 | --- | --- | --- |
-| 读取铰链角度做触发源 | `LidAngleSensor.swift` | 私有 IOHID 读取 Lid Angle Sensor，独立线程按 `sampleHz` 采样，EMA 平滑 |
-| 动画与角度实时同步 | `HingeAnimationEngine.update` | `进度 = (角度 - closedAngle) / (openAngle - closedAngle)`，抬多少走多少 |
-| 停顿 → 自动加速播完剩余片段 → 切回正常画面 | `startCatchUp / tickCatchUp / finishSequence` | 角度静止超过 `stallDurationMs` 即进入加速，播完关闭覆盖层（`active=false`） |
-| 停顿后反向移动 → 取消加速、跟随新角度 | `cancelCatchUp` | 任何一次有效角度变化都会立刻取消加速并回到跟随模式 |
-| **不要求开合到极限角度** | `finishSequence` + 两端的“交接曲线” | 掉头/停手都能从当前角度补完；`progress` 到 0/1 即结束，覆盖层两端淡出，无需真的压到底或掰到极限 |
+| 读取铰链角度做触发源 | `LidAngleSensor.swift` | 规范 IOHIDManager 匹配 `vendor=0x05AC / product=0x8104 / usagePage=0x0020 / usage=0x008A`，角度元素 `0x0020/0x047F`；独立线程 RunLoop + 上报回调 + 低频兜底轮询，并请求 `ReportInterval=8ms` 提速 |
+| 动画与角度实时同步 | `HingeAnimationEngine.progress(for:)` | `进度 = (triggerAngleDeg − 角度) ÷ (triggerAngleDeg − closeAngleDeg)`，抬多少走多少 |
+| 停顿 → 自动加速播完剩余片段 → 切回正常画面 | `startCatchUp / tickCatchUp / finishSequence` | 角度静止超过 `stallDurationMs` 即进入加速；补完到「展开」端（进度 0）立即 `active=false` 隐藏覆盖层交回正常桌面 |
+| 停顿后反向移动 → 取消加速、跟随新角度 | `cancelCatchUp` | 任何一次有效角度变化都会立刻取消加速并回到跟随模式；折到底后锁定，掀开才解除 |
+| **不要求开合到极限角度** | `finishSequence` + 平滑对齐 | 停手即从当前进度补完；进度与真实角度差过大（>0.25）时用一小段平滑追赶，避免画面瞬跳 |
 | 全局覆盖、不干扰鼠标与窗口 | `OverlayController.swift` | `ignoresMouseEvents`、不成为 key/main 窗口、高窗口层级 + `canJoinAllSpaces` |
-| **翻盖方向（适配 MacBook）** | `HingeClip.swift` | 把**显示屏当上屏**、**键盘侧当下屏**：上屏绕底部铰链线 `rotateX` 翻动（掀开/扣下），下屏平放并承接上屏的镜像倒影与键盘面光带；折叠的是 Mac 原生桌面本身（截屏为画源），不做手机模型、不做双屏 |
-| 铰链位置可调 | `hingeLineRatio` | 距屏幕顶边的比例，默认 0.62 → 上方 62% 是会翻动的「上屏」，下方 38% 是「键盘侧下屏」 |
-| 低性能消耗 | `HingeClip.swift` + `emit()` | 程序化定格渲染（每帧只写十余个图层属性）、状态无变化不回调、窗口隐藏即 `orderOut` |
+| **折叠视错觉（1:1 复刻 DuoHinge）** | `FoldShader.swift` + `MetalFoldView.swift` | 桌面固定在 z=0 平面，一整块「虚拟玻璃」绕屏幕**底边铰链**立起；每像素从固定视点发射线穿过玻璃、打到桌面平面求交采样 → 呈现桌面被“折倒收进铰链”。四趟 GPU 管线：投影 → 横向高斯 → 纵向高斯 → 径向色散 |
+| 低性能消耗 | `MetalFoldView.tick` + `emit()` | 有变化才渲染、静止时 `displayLink` 暂停；进度 0 时隐藏窗口并停采集 |
 | 可启停 / 可调停顿时长与加速倍率 | 菜单栏 + `config.json` | `enabled`、`stallDurationMs`、`catchUpSpeed` 等 |
 
 ### 抗抖动设计（避免“必须掰到极限”的普通方案）
-- **端点锁**：某一端补完一次后锁定，角度回到中间区域（`rearmProgress`）才允许再次触发，避免同方向反复播放。
+- **端点锁**：某一端补完一次后锁定，进度离开端点（`rearmProgress`）才允许再次触发，避免同方向反复播放。
+- **折上锁定**：加速补完到「完全折上」后保持画面，直到用户反向掀开才重新跟随真实角度。
 - **累积阈值**：角度变化按累积量判定，慢速移动也能识别，同时过滤传感器噪声。
 - **最短补完时长**：`minCatchUpMs`（默认 120ms）保证剩余片段太短时不会“秒切”。
 - **采样中断保护**：休眠唤醒后重置时间基准，不会把系统挂起误判成“用户停手”。
@@ -174,24 +174,22 @@ launchctl load ~/Library/LaunchAgents/com.mackz.plugin.plist
 | `minCatchUpMs` | 120 | 加速补完的最短时长，防“秒切” |
 | `clipDuration` | 0.6 | 完整 0→1 片段的基准时长（秒），1:1 与加速都以它为基准 |
 | `angleEpsilon` | 0.8 | 角度累积阈值（度），越大越抗抖但越迟钝 |
-| `closedAngle` / `openAngle` | 0 / 130 | 端点标定值，建议用菜单栏「标定」写入 |
-| `invertAngle` | false | 打开时角度反而变小就设 true |
-| `rearmProgress` | 0.8 | 补完后回到该进度内才允许再次触发同向序列 |
-| `sampleHz` | 30 | 采样频率，30~60 足够；调高更细腻但更费电 |
-| `smoothing` | 0.35 | EMA 平滑系数，0 关闭 |
+| `triggerAngleDeg` | 90 | **开始折叠角**：角度 ≥ 该值 → 进度 0（正常画面） |
+| `closeAngleDeg` | 0 | **完全合上角**：角度 ≤ 该值 → 进度 1（玻璃完全立起） |
+| `invertAngle` | false | 掀开屏幕时角度反而变小就设 true |
+| `rearmProgress` | 0.05 | 进度离开端点超过该值才允许再次触发同向序列 |
+| `sampleHz` | 60 | 兜底轮询频率；真实刷新依赖传感器的上报回调 |
+| `smoothing` | 0.45 | EMA 平滑系数，0 关闭 |
 | `overlayLevel` | 999 | 窗口层级，高于菜单栏(24)/状态栏(25)/Dock，可覆盖全屏 App |
-| `foldAngleDeg` | 96 | 完全合上时的折痕角（内部钳制 80° 内，避免几何退化） |
-| `hingeLineRatio` | 0.62 | **折痕位置**（距屏幕顶边比例）：上方 = 上屏，下方 = 键盘侧 |
-| `blurStrength` | 0.55 | 渐进玻璃模糊强度 0~1（越靠近折痕越模糊） |
-| `dispersion` | 0.35 | 边缘/折痕色散强度 0~1 |
-| `eyeDistance` | 2.2 | 视距（以屏高为单位，越小透视越强） |
+| `visualStyle` | "frosted" | 视觉预设：`clear` / `frosted` / `cinematic`（对应 blur 0.25/1/1.3，darkness 0.2/1/1.2，色散 0/0/1） |
+| `viewpoint` | "desk" | 视点：`desk` 俯看（笔记本放桌面）/ `front` 平视（支架抬升） |
+| `foldAngleDeg` | 90 | 玻璃完全立起时的角度。90 = 与参考实现完全一致（末端几何退化为整屏黑）；调小到 70~80 可让完全折上时仍保留桌面画面 |
 | `captureScreen` | true | 是否实时抓屏做重投影（关闭则只显示暗场） |
 | `captureFPS` | 60 | 采集帧率上限 |
-| `captureIdleStop` | true | 完全打开/合上时停采集省电；false = 常驻采集响应更快 |
+| `captureIdleStop` | true | 完全展开时停采集省电；false = 常驻采集响应更快 |
 | `renderScale` | 0.75 | 渲染分辨率比例，越低越省电（模糊会掩盖损失） |
 | `overlayAlpha` | 1.0 | 覆盖层最大不透明度 |
 | `excludedFromCapture` | false | true 时录屏/共享看不到动画 |
-| `usagePage` / `usage` / `eventType` / `eventField` / `productNameContains` | 32 / 0 / 1 / 0 / "lid" | 传感器匹配参数，按探针报告调整 |
 
 ---
 
@@ -229,9 +227,9 @@ macOS 自带 bash 3.2 的已知坑：`$VAR` 后面紧跟中文（多字节）字
 
 | 现象 | 原因与解决 |
 | --- | --- |
-| 菜单栏显示“未检测到铰链角度传感器” | 机型无该传感器（Intel 常见）；或产品名不匹配。跑「传感器探针」，把报告里角度传感器的 `usagePage/usage/eventType/eventField` 与 `productNameContains` 填进配置（产品名不确定就把 `productNameContains` 设为 `""` 走自动挑选） |
+| 菜单栏显示“未检测到铰链角度传感器” | 机型确实没有该硬件（Intel 机型常见）。跑「传感器探针」看报告：若 `Lid Angle Sensor 设备数: 0`，说明本机没有这颗传感器，角度跟随无法工作——这是硬件限制，不是程序问题（可用设置面板的「手动预览」滑块体验动画） |
 | 探针里所有取值都是 0 | 系统权限或机型限制：在「系统设置 → 隐私与安全性 → 输入监控」中允许 MacKZ，或终端用 `sudo` 运行一次 App 再试 |
-| 动画完全不出现 | ① 插件未启用 ② 角度没变化（先确认菜单里「铰链角度」有数值在动）③ `closedAngle/openAngle` 标定反了（进度一直在 0 或 1） |
+| 动画完全不出现 | ① 插件未启用 ② 角度没变化（先确认菜单里「铰链角度」有数值在动）③ 角度一直在 `triggerAngleDeg`(默认 90°) 以上 —— 只有低于该角才开始折叠，可用菜单栏「标定」把「开始折叠角」改到你实际会到的位置 |
 | 动画一出现就消失 | `angleEpsilon` 太大或 `minCatchUpMs` 太小；也可能进度已到端点被锁（把屏幕开到中间再试） |
 | 全屏 App 上看不到 | 提高 `overlayLevel`（如 1200）；个别全屏游戏的专属空间不接收外部窗口，属系统限制 |
 | 录屏里没有动画 | 属于预期：把 `excludedFromCapture` 设为 `false` 即可被捕获 |

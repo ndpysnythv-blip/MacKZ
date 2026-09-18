@@ -3,7 +3,8 @@ import AppKit
 /// 菜单栏控制器：插件启停、参数热重载、角度标定、传感器探针、打开设置面板、检查更新。
 final class StatusBarController: NSObject, NSMenuDelegate {
 
-    enum Calibration { case closed, open }
+    /// 端点标定：把当前角度写为「开始折叠角」或「完全合上角」
+    enum Calibration { case foldStart, foldEnd }
 
     var onToggleEnabled: ((Bool) -> Void)?
     var onCalibrate: ((Calibration) -> Void)?
@@ -82,8 +83,8 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         menu.addItem(settingsItem)
         menu.addItem(.separator())
 
-        menu.addItem(makeItem("将当前角度标定为「完全闭合」", #selector(calibrateClosed)))
-        menu.addItem(makeItem("将当前角度标定为「完全打开」", #selector(calibrateOpen)))
+        menu.addItem(makeItem("将当前角度标定为「开始折叠」（张开角）", #selector(calibrateFoldStart)))
+        menu.addItem(makeItem("将当前角度标定为「完全合上」", #selector(calibrateFoldEnd)))
         menu.addItem(makeItem("预览一次开合动画（验证渲染）", #selector(demo)))
         menu.addItem(.separator())
         menu.addItem(makeItem("授权屏幕录制（Duo Continuity 画源）", #selector(requestCapture)))
@@ -135,7 +136,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         case .tracking: phaseText = "跟随角度中"
         case .catchUp: phaseText = "停顿，加速补完中"
         }
-        stateItem.title = String(format: "状态：%@  进度 %d%%", phaseText, Int(engine.progress * 100 + 0.5))
+        stateItem.title = String(format: "状态：%@  折叠 %d%%", phaseText, Int(engine.progress * 100 + 0.5))
         angleItem.title = engine.lastAngleDeg.map { String(format: "铰链角度：%.1f°", $0) } ?? "铰链角度：--"
     }
 
@@ -147,8 +148,8 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         onToggleEnabled?(enabled)
     }
 
-    @objc private func calibrateClosed() { onCalibrate?(.closed) }
-    @objc private func calibrateOpen() { onCalibrate?(.open) }
+    @objc private func calibrateFoldStart() { onCalibrate?(.foldStart) }
+    @objc private func calibrateFoldEnd() { onCalibrate?(.foldEnd) }
     @objc private func reload() { onReload?() }
     @objc private func openConfig() { onOpenConfig?() }
     @objc private func openSettings() { onOpenSettings?() }

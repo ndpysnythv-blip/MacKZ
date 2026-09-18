@@ -18,22 +18,22 @@ struct Config: Codable {
     var clipDuration = 0.6
     /// 加速补完的最短时长（毫秒）：避免剩余片段太短时“秒切”导致观感突兀
     var minCatchUpMs = 120
+    /// 同向重触发阈值：进度离开端点超过该值，才允许再次触发同向序列（端点防抖）
+    var rearmProgress = 0.05
 
-    // MARK: 角度标定（不同机型/摆放姿态有差异，用菜单栏“标定”写入）
-    /// 完全合屏时的角度
-    var closedAngle = 0.0
-    /// 完全打开时的角度
-    var openAngle = 130.0
-    /// 传感器方向反转（若打开时角度反而变小，置 true）
+    // MARK: 角度标定（与 DuoHinge 一致的单参数触发模型）
+    /// 触发角（度）：铰链角度 ≥ 该值 → 进度 0（完全展开，不显示动画）
+    var triggerAngleDeg = 90.0
+    /// 完全合上角（度）：铰链角度 ≤ 该值 → 进度 1（玻璃完全立起）
+    var closeAngleDeg = 0.0
+    /// 传感器方向反转（若打开屏幕时角度反而变小，置 true）
     var invertAngle = false
-    /// 补完动画后，进度回到该值以内才允许再次触发同向序列（端点防抖）
-    var rearmProgress = 0.8
 
     // MARK: 采样
-    /// 采样频率（Hz）
-    var sampleHz = 30.0
+    /// 采样频率（Hz）：低频用于兜底轮询，真实刷新依赖传感器上报回调
+    var sampleHz = 60.0
     /// 指数平滑系数 0~1，0 表示不平滑
-    var smoothing = 0.35
+    var smoothing = 0.45
 
     // MARK: 覆盖渲染层
     /// 窗口层级，默认 999（高于菜单栏、状态栏、Dock，可覆盖其它 App 全屏）
@@ -50,32 +50,38 @@ struct Config: Codable {
     var captureIdleStop = true
     /// 渲染分辨率比例 0.5~1（越低越省电，模糊会掩盖分辨率损失）
     var renderScale = 0.75
-    /// 完全合上时的最大折痕角（度），内部钳制在 80° 内避免几何退化
-    var foldAngleDeg = 96.0
-    /// 铰链位置：距屏幕**顶边**的比例。默认 0.62 → 上方是「上屏」，下方是「键盘侧下屏」
-    var hingeLineRatio = 0.62
-    /// 渐进玻璃模糊强度 0~1
-    var blurStrength = 0.55
-    /// 边缘/折痕色散强度 0~1
-    var dispersion = 0.35
-    /// 视距（以屏高为单位，越小透视越强）
-    var eyeDistance = 2.2
+    /// 视觉效果预设：clear（轻模糊）/ frosted（磨砂玻璃，默认）/ cinematic（深模糊 + 棱镜色散）
+    var visualStyle = "frosted"
+    /// 视点：desk（坐桌前俯看，默认）/ front（支架抬升后平视）
+    var viewpoint = "desk"
+    /// 玻璃完全立起时的角度（度）。90 = 与参考实现完全一致；调小可让完全折上时仍保留画面（末端不会整屏归黑）
+    var foldAngleDeg = 90.0
     /// 是否显示进度角标
     var showBadge = true
     /// 启动后自动检查更新（发现新版本才提示，平时完全静默）
     var autoCheckUpdate = true
 
-    // MARK: 传感器匹配（不同机型可能不同，用“传感器探针”确认）
-    /// HID 传感器用途页，0x0020 = Sensors
-    var usagePage = 0x0020
-    /// HID 用途，0 = 不限定
-    var usage = 0
-    /// HID 事件类型，1 = VendorDefined
-    var eventType = 1
-    /// 事件字段偏移（字段 = eventType << 16 | eventField），0 为默认
-    var eventField = 0
-    /// 按产品名筛选传感器（不区分大小写），留空表示自动挑选取值在 0~180 的服务
-    var productNameContains = "lid"
+    // MARK: 视觉预设派生参数（数值 1:1 对应 DuoHinge 的 HingeStyle 预设）
+    /// 玻璃散射模糊强度
+    var styleBlur: Double {
+        switch visualStyle {
+        case "clear": return 0.25
+        case "cinematic": return 1.3
+        default: return 1.0            // frosted
+        }
+    }
+    /// 幕布压暗强度
+    var styleDarkness: Double {
+        switch visualStyle {
+        case "clear": return 0.2
+        case "cinematic": return 1.2
+        default: return 1.0            // frosted
+        }
+    }
+    /// 径向色散强度（仅 cinematic 开启）
+    var styleDispersion: Double {
+        return visualStyle == "cinematic" ? 1.0 : 0.0
+    }
 }
 
 /// 配置读写：默认值 + 用户配置合并（这样新增字段不会让老配置文件解析失败）。

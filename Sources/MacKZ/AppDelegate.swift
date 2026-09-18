@@ -153,13 +153,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         switch edge {
-        case .closed: config.closedAngle = angle
-        case .open: config.openAngle = angle
+        case .foldStart: config.triggerAngleDeg = angle
+        case .foldEnd: config.closeAngleDeg = angle
+        }
+        // 触发角必须大于完全合上角，否则进度映射会反向
+        if config.triggerAngleDeg - config.closeAngleDeg < 1 {
+            notify("标定被拒绝", "「开始折叠」角必须比「完全合上」角至少大 1°，请重新标定。")
+            return
         }
         ConfigStore.save(config)
         engine.apply(config: config)
         settings?.sync(config: config)
-        notify("标定完成", String(format: "已把 %.1f° 设为「%@」。", angle, edge == .closed ? "完全闭合" : "完全打开"))
+        notify("标定完成",
+               String(format: "已把 %.1f° 设为「%@」。", angle, edge == .foldStart ? "开始折叠角" : "完全合上角"))
     }
 
     private func reloadConfig() {
@@ -251,11 +257,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let center = NSWorkspace.shared.notificationCenter
         center.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
             NSLog("[MacKZ] 唤醒（开盖）→ 播放展开动画")
-            self?.engine.playSingle(to: 1.0, duration: 0.7)
+            self?.engine.playSingle(to: 0.0, duration: 0.7)      // 0 = 展开，收回正常画面
         }
         center.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { [weak self] _ in
             NSLog("[MacKZ] 即将睡眠（合盖）→ 播放合上动画")
-            self?.engine.playSingle(to: 0.0, duration: 0.4)
+            self?.engine.playSingle(to: 1.0, duration: 0.4)      // 1 = 折上
         }
 
         status?.setSensorStatus("无传感器，已用开盖/合盖触发")

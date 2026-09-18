@@ -3,531 +3,741 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>MacKZ · Duo Continuity 开合过渡动画</title>
+<title>MacKZ · Duo Continuity 开合过渡动画（WebGL 预览）</title>
 <style>
-  :root{
-    color-scheme:dark;
-    --hinge-blur-fine:6px; --hinge-blur-mid:18px; --hinge-blur-wide:40px;
-    --ui1:#4f5ceb; --ui2:#9e4feb;
-  }
+  :root{color-scheme:dark}
   *{box-sizing:border-box}
-  body{margin:0;font:14px/1.6 -apple-system,"PingFang SC",sans-serif;background:radial-gradient(1200px 600px at 50% -10%,#141a2b,#080a10 60%);color:#e7eaf3}
-  .wrap{max-width:1000px;margin:0 auto;padding:28px 20px 60px}
-  h1{font-size:20px;margin:0 0 6px;letter-spacing:.2px}
-  .kicker{font-size:12px;letter-spacing:2px;color:#7c88a8;text-transform:uppercase;margin-bottom:10px}
-  .sub{color:#8b93a7;font-size:12.5px;margin-bottom:20px}
+  body{margin:0;font:14px/1.6 -apple-system,"PingFang SC",sans-serif;
+       background:radial-gradient(1200px 600px at 50% -10%,#141a2b,#080a10 60%);color:#e7eaf3}
+  .wrap{max-width:1060px;margin:0 auto;padding:26px 20px 56px}
+  h1{font-size:20px;margin:0 0 4px}
+  .kicker{font-size:12px;letter-spacing:2px;color:#7c88a8;text-transform:uppercase;margin-bottom:8px}
+  .sub{color:#8b93a7;font-size:12.5px;margin-bottom:18px}
   .card{background:linear-gradient(180deg,#10141f,#0c0f18);border:1px solid #222a3d;border-radius:16px;padding:16px;margin-bottom:16px}
-  .card h2{font-size:13px;margin:0 0 12px;color:#aab3c8;font-weight:600;letter-spacing:.3px}
-  button{background:linear-gradient(180deg,#5a68ff,#4149d6);color:#fff;border:0;border-radius:10px;padding:9px 15px;font-size:13px;cursor:pointer;font-weight:500}
+  .card h2{font-size:13px;margin:0 0 12px;color:#aab3c8;font-weight:600}
+  button{background:linear-gradient(180deg,#5a68ff,#4149d6);color:#fff;border:0;border-radius:10px;
+         padding:9px 14px;font-size:13px;cursor:pointer;font-weight:500}
   button:hover{filter:brightness(1.08)}
   button.ghost{background:#1b2130;border:1px solid #2b3245}
-  button:disabled{opacity:.45;cursor:not-allowed}
   .row{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
   .row+.row{margin-top:10px}
-  .row label{width:132px;color:#8b93a7;font-size:12px;flex:none}
-  input[type=range]{flex:1;min-width:160px;accent-color:#5a68ff}
-  .val{width:78px;text-align:right;font-variant-numeric:tabular-nums;color:#c3cbdd;font-size:12px}
+  .row label{width:120px;color:#8b93a7;font-size:12px;flex:none}
+  input[type=range]{flex:1;min-width:150px;accent-color:#5a68ff}
+  select{background:#1b2130;color:#dfe5f2;border:1px solid #2b3245;border-radius:8px;padding:6px 9px;font-size:12.5px}
+  .val{width:86px;text-align:right;font-variant-numeric:tabular-nums;color:#c3cbdd;font-size:12px}
   .pill{font-size:11.5px;padding:3px 9px;border-radius:999px;background:#1b2130;border:1px solid #2b3245;color:#9aa4bb}
   .pill.ok{background:#10301f;border-color:#1e5c39;color:#6ee7a5}
   .pill.warn{background:#31240f;border-color:#6b4a13;color:#f3c065}
-  .pill.err{background:#31151a;border-color:#6b1f2b;color:#f78598}
-  code,kbd{background:#161b26;border:1px solid #262e40;border-radius:6px;padding:2px 6px;font-size:12px}
-  .hex{margin-top:8px;font:12px/1.5 ui-monospace,Menlo,monospace;color:#7f8aa3;word-break:break-all;max-height:64px;overflow:auto}
-
-  /* ===== Duo Continuity 舞台 ===== */
-  .stage{position:relative;height:380px;border-radius:18px;overflow:hidden;background:#05060a;
-         border:1px solid #232a3d;perspective:1400px;perspective-origin:50% 50%;isolation:isolate}
-  .halo{position:absolute;inset:-20%;background:radial-gradient(50% 60% at 50% 50%,rgba(90,104,255,.18),transparent 70%);pointer-events:none}
-  /* 单块 Mac 屏幕：上方 = 可翻动的「上屏」；下方 = 键盘侧「下屏」（承接倒影） */
-  .lid{position:absolute;left:0;top:0;width:100%;overflow:hidden;opacity:0;
-       transform-origin:center bottom;will-change:transform,opacity}
-  .lid .layer,.lid .ghost{position:absolute;left:0;top:0;width:100%;height:100%;overflow:hidden}
-  .lid .screen{position:absolute;left:0;top:0;width:100%;height:var(--stage-h,380px)}
-  .lid .layer.blur-fine{filter:blur(var(--hinge-blur-fine))}
-  .lid .layer.blur-mid{filter:blur(var(--hinge-blur-mid))}
-  .lid .layer.blur-wide{filter:blur(var(--hinge-blur-wide))}
-  .ghost{opacity:0;mix-blend-mode:screen;will-change:transform,opacity}
-  /* 键盘侧（下屏）：深色键盘面 + 上屏倒影（镜像 = 绕铰链线翻折） */
-  .deck{position:absolute;left:0;width:100%;overflow:hidden;opacity:0}
-  .deck .refl{position:absolute;left:0;top:0;width:100%;height:100%;overflow:hidden;opacity:0;
-       transform:scaleY(-1);filter:blur(16px);
-       -webkit-mask-image:linear-gradient(to bottom,rgba(0,0,0,0) 0%,rgba(0,0,0,.85) 100%)}
-  /* 倒影源：整屏画面，偏移量 = 下屏高 - 上屏高，翻转后正好呈现“铰链线两侧镜像” */
-  .deck .refl .screen{position:absolute;left:0;width:100%;height:var(--stage-h,380px);
-       top:calc(var(--deck-h,140px) - var(--lid-h,240px))}
-  .deck-sheen{position:absolute;inset:0;
-       background:linear-gradient(180deg,rgba(22,26,40,.30),rgba(6,8,14,.80) 55%,rgba(3,4,8,.95))}
-  /* 铰链线：辉光 + 青/品红横向色散 */
-  .hinge-glow,.crease{position:absolute;left:0;width:100%;pointer-events:none}
-  .hinge-glow{height:14px;margin-top:-7px;
-    background:linear-gradient(180deg,rgba(115,217,255,0),#cdf1ff,rgba(115,217,255,0));opacity:.35}
-  .crease{height:2px;opacity:0}
-  .crease.cy{background:linear-gradient(90deg,rgba(89,242,255,0),rgba(89,242,255,.9),rgba(89,242,255,0))}
-  .crease.mg{background:linear-gradient(90deg,rgba(255,107,217,0),rgba(255,107,217,.8),rgba(255,107,217,0))}
-  .sweep{position:absolute;left:14%;width:72%;height:200px;pointer-events:none;opacity:.9;
-    background:linear-gradient(180deg,rgba(255,255,255,0),rgba(200,225,255,.15),rgba(255,255,255,0));
-    transform:rotate(-2.6deg)}
-  .scrim{position:absolute;inset:0;pointer-events:none;
-    background:linear-gradient(180deg,rgba(4,6,12,.62),rgba(8,10,20,.28),rgba(4,6,12,.62));opacity:0}
-  .hud{position:absolute;left:14px;top:12px;font:12px/1.5 ui-monospace,Menlo,monospace;color:#ffffffb0;text-shadow:0 1px 6px #000}
-  .badge{position:absolute;left:0;right:0;bottom:14px;text-align:center;font:12px/1 ui-monospace,Menlo,monospace;color:#ffffffa8}
-
-  /* 模拟屏幕内容（若接入真实截屏可替换为图片） */
-  .screen{position:absolute;inset:0;background:
-      radial-gradient(700px 420px at 20% 15%,rgba(79,92,235,.55),transparent 60%),
-      radial-gradient(600px 400px at 85% 85%,rgba(158,79,235,.45),transparent 62%),
-      linear-gradient(160deg,#0b1020,#131a30 55%,#0a0e1a)}
-  .screen .bar{position:absolute;left:22px;right:22px;height:12px;border-radius:6px;background:#ffffff14}
-  .screen .blk{position:absolute;border-radius:12px;background:linear-gradient(140deg,#ffffff1f,#ffffff08);border:1px solid #ffffff12}
-  .screen .t{position:absolute;font-size:13px;color:#ffffff8c;letter-spacing:.5px}
+  .stageWrap{position:relative;border-radius:14px;overflow:hidden;border:1px solid #232a3d;background:#05060a}
+  canvas{display:block;width:100%;height:auto}
+  .hint{font-size:11.5px;color:#7f8aa3;margin-top:10px}
+  .mono{font:12px/1.6 ui-monospace,Menlo,monospace;color:#9aa4bb}
 </style>
 </head>
 <body>
 <div class="wrap">
-  <div class="kicker">MacKZ Plugin</div>
-  <h1>Duo Continuity · 折叠开合过渡动画</h1>
-  <div class="sub">⚠️ 本页只是**逻辑预览**（近似几何），真机效果由 macOS 端的 Metal 着色器实时渲染：ScreenCaptureKit 抓桌面 → 射线投射重投影到虚拟折叠面 → 两趟高斯玻璃模糊 + 边缘色散，按屏幕刷新率驱动。参数与真机一一对应，可在这里先调好数值再写进 config.json。</div>
-
-  <!-- ===== 数据源 ===== -->
-  <div class="card">
-    <h2>铰链数据源</h2>
-    <div class="row">
-      <button id="connect">连接铰链传感器（授权）</button>
-      <button class="ghost" id="useSim">改用模拟滑块</button>
-      <span class="pill" id="hidState">未连接</span>
-    </div>
-    <div class="row">
-      <label>角度字段偏移</label>
-      <input type="range" id="offset" min="0" max="12" step="1" value="0">
-      <span class="val" id="offsetVal">0</span>
-      <span class="pill" id="hidHint">自动识别中</span>
-    </div>
-    <div class="hex" id="hex">等待传感器数据…（WebHID 需 Chrome/Edge，且页面为 https 或 localhost）</div>
+  <div class="kicker">MacKZ · Duo Continuity</div>
+  <h1>折叠屏开合过渡动画（与 Mac 端同一套算法）</h1>
+  <div class="sub">
+    模型：桌面画面固定在 z=0 平面，一整块「虚拟玻璃」绕屏幕<b>底边铰链</b>立起；
+    每个像素从固定视点发射线穿过玻璃、打到桌面平面求交采样 →
+    呈现桌面被“折倒收进铰链”的视错觉（不是把画面压缩或二次旋转）。
+    进度 = (开始折叠角 − 铰链角度) ÷ (开始折叠角 − 完全合上角)。
   </div>
 
-  <!-- ===== 舞台 ===== -->
-  <div class="stage" id="stage">
-    <div class="halo"></div>
-    <!-- 键盘侧（下屏）：承接倒影 -->
-    <div class="deck" id="deck">
-      <div class="refl" id="refl"></div>
-      <div class="deck-sheen"></div>
+  <div class="card">
+    <h2>画面（实时 GPU 四趟渲染：透视投影 → 横向模糊 → 纵向模糊 → 径向色散）</h2>
+    <div class="stageWrap">
+      <canvas id="stage" width="1000" height="625"></canvas>
+      <canvas id="stage2d" width="1000" height="625" style="display:none"></canvas>
     </div>
-    <!-- 上屏：绕铰链线翻动 -->
-    <div class="lid" id="lid">
-      <div class="layer sharp"></div>
-      <div class="layer blur-fine"></div>
-      <div class="layer blur-mid"></div>
-      <div class="layer blur-wide"></div>
-      <div class="ghost"></div>
-    </div>
-    <div class="scrim" id="scrim"></div>
-    <div class="hinge-glow" id="hinge"></div>
-    <div class="crease cy" id="cy"></div>
-    <div class="crease mg" id="mg"></div>
-    <div class="sweep" id="sweep"></div>
-    <div class="hud" id="hud"></div>
-    <div class="badge" id="badge"></div>
+    <div class="hint" id="modeHint">完全展开（进度 0）时投影为恒等映射，画面就是原始桌面；进度越大，玻璃越立起。</div>
   </div>
 
-  <!-- ===== 参数 ===== -->
   <div class="card">
-    <h2>角度与智能判定</h2>
+    <h2>铰链角度（拖动 = 手动开合笔记本屏幕）</h2>
     <div class="row">
-      <label>铰链角度（模拟）</label>
-      <input type="range" id="angle" min="0" max="130" step="0.5" value="0">
-      <span class="val" id="angleVal">0°</span>
+      <label>铰链角度</label>
+      <input id="angle" type="range" min="0" max="180" step="0.5" value="90">
+      <span class="val" id="angleVal">90.0°</span>
     </div>
     <div class="row">
-      <label>停顿判定（ms）</label>
-      <input type="range" id="stall" min="80" max="900" step="10" value="350">
-      <span class="val" id="stallVal">350</span>
+      <label>开始折叠角</label>
+      <input id="trigger" type="range" min="30" max="130" step="1" value="90">
+      <span class="val" id="triggerVal">90°</span>
     </div>
     <div class="row">
-      <label>加速倍率</label>
-      <input type="range" id="speed" min="1" max="8" step="0.5" value="3">
-      <span class="val" id="speedVal">3.0×</span>
+      <label>最大立起角</label>
+      <input id="foldAngle" type="range" min="30" max="90" step="1" value="90">
+      <span class="val" id="foldAngleVal">90°</span>
     </div>
     <div class="row">
-      <label>角度阈值（度）</label>
-      <input type="range" id="eps" min="0.2" max="3" step="0.1" value="0.8">
-      <span class="val" id="epsVal">0.8</span>
-    </div>
-    <div class="row">
-      <label>折叠角（度）</label>
-      <input type="range" id="fold" min="40" max="100" step="1" value="88">
-      <span class="val" id="foldVal">88°</span>
-    </div>
-    <div class="row">
-      <label>铰链位置</label>
-      <input type="range" id="hingeRatio" min="0.3" max="0.9" step="0.01" value="0.62">
-      <span class="val" id="hingeRatioVal">0.62</span>
-    </div>
-    <div class="row">
-      <label>停手自动补完</label>
-      <input type="checkbox" id="autoFinish" checked style="flex:none;width:auto">
-      <span class="pill">勾选＝按需求自动加速补完；取消＝纯 1:1 跟随，方便观察折叠细节</span>
-    </div>
-    <div class="row">
-      <label>渐进模糊强度</label>
-      <input type="range" id="blur" min="0.5" max="2.2" step="0.1" value="1">
-      <span class="val" id="blurVal">1.0×</span>
-    </div>
-    <div class="row">
-      <button id="auto">演示：抬到一半停手</button>
-      <button class="ghost" id="reset">复位到合屏</button>
-      <span class="pill" id="phase">待机</span>
+      <span class="pill" id="progressPill">折叠进度 0%</span>
+      <span class="pill" id="phasePill">待机</span>
+      <span class="pill" id="warnPill" style="display:none"></span>
     </div>
   </div>
 
-  <!-- ===== 一键安装 ===== -->
   <div class="card">
-    <h2>自动安装到本机 Mac</h2>
+    <h2>智能逻辑演示（停顿 → 自动加速补完 → 直接回到正常画面）</h2>
     <div class="row">
-      <button id="download">下载一键安装程序（MacKZ-安装.command）</button>
-      <button class="ghost" id="copyCmd">复制终端安装命令</button>
-      <button class="ghost" id="copyUninstall">复制卸载命令</button>
+      <button id="btnStallOpen">抬到一半停手（应自动回到正常画面）</button>
+      <button class="ghost" id="btnStallClose">合到一半停手（应自动折到底）</button>
+      <button class="ghost" id="btnDemo">播放一次完整开合</button>
     </div>
-    <div class="hex" id="installInfo">
-      脚本会依次完成：编译 → 安装到 /Applications → 写入开机自启（LaunchAgent）→ 立即启动。<br>
-      放到 MacKZ 目录后双击 <code>MacKZ-安装.command</code> 即可；如提示「无法验证开发者」，右键 → 打开。
+    <div class="hint">
+      停顿判定 350 ms · 加速倍率 3× · 补完最短 120 ms。停手后动画会把剩余片段播完，
+      补完到「展开」端立即隐藏覆盖层交回正常桌面，不需要把屏幕开到极限角度。
     </div>
+  </div>
+
+  <div class="card">
+    <h2>视觉参数</h2>
+    <div class="row">
+      <label>视觉风格</label>
+      <select id="style">
+        <option value="clear">Clear · 轻模糊</option>
+        <option value="frosted" selected>Frosted · 磨砂玻璃</option>
+        <option value="cinematic">Cinematic · 深模糊 + 棱镜色散</option>
+      </select>
+      <label style="width:auto">视点</label>
+      <select id="viewpoint">
+        <option value="desk" selected>俯看（笔记本放桌面）</option>
+        <option value="front">平视（支架抬升）</option>
+      </select>
+    </div>
+    <div class="hint mono" id="diag">--</div>
   </div>
 </div>
 
 <script>
-/* =========================================================================
- * 1) 状态机：与 Swift 端 HingeAnimationEngine 完全等价的精简实现
- * ========================================================================= */
-const cfg = {
-  stallMs: 350, eps: 0.8, speed: 3.0, clip: 0.6, minCatch: 120,
-  closed: 0, open: 130, rearm: 0.8, smoothing: 0.35,
-  foldDeg: 88, blurScale: 1.0, hingeRatio: 0.62, autoFinish: true, lidH: 0, deckH: 0
-};
-let holding = false;   // 鼠标按住角度滑块 = “手正扶着屏幕”，不判定停顿
-const st = {
-  progress: 0, phase: 'idle', raw: null, lastAngle: null, lastT: 0, lastMoveT: 0,
-  pending: 0, target: null, openLatched: false, closeLatched: false, catchAt: 0,
-  catchTarget: 0, catchRate: 0
-};
+"use strict";
+/* =======================================================================
+   WebGL 版：与 Mac 端 FoldShader.swift 完全同源的算法移植
+   四趟：hingeProject → hingeBlurX → hingeBlurY → hingeDispersion
+   坐标约定：显示坐标 y 向下；纹理统一按 t = 1 - y/height 采样（源图上传时翻转）
+   ======================================================================= */
 
-// 主输入：角度 + 时间戳（真实传感器与模拟滑块共用同一条通路）
-function update(angle, t) {
-  // 采样中断保护：长时间无数据后重置时间基准，避免误判为“停顿”
-  if (st.lastT > 0 && (t - st.lastT) / 1000 > 0.5) { st.lastT = t; st.lastAngle = angle; st.pending = 0; }
+const VERT = `#version 300 es
+out vec2 vUv;
+void main(){
+  vec2 uv = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2));
+  vUv = uv;
+  gl_Position = vec4(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, 0.0, 1.0);
+}`;
 
-  // 1) 平滑
-  const sm = (cfg.smoothing > 0 && st.raw !== null) ? st.raw + (angle - st.raw) * cfg.smoothing : angle;
-  st.raw = sm;
-  // 2) 角度 -> 进度（1:1 跟随）
-  st.progress = clamp((sm - cfg.closed) / (cfg.open - cfg.closed), 0, 1);
+const FRAG = `#version 300 es
+precision highp float;
+in vec2 vUv;
+out vec4 outColor;
 
-  // 3) 有效移动（累积阈值抗抖）→ 取消加速，回到跟随
-  if (st.lastAngle !== null) st.pending += sm - st.lastAngle;
-  st.lastAngle = sm; st.lastT = t;
-  if (Math.abs(st.pending) >= cfg.eps) {
-    const dir = st.pending > 0 ? 1 : -1;
-    st.pending = 0; st.lastMoveT = t;
-    if (st.progress < cfg.rearm) st.openLatched = false;
-    if (st.progress > 1 - cfg.rearm) st.closeLatched = false;
-    if (dir > 0) { if (!st.openLatched) st.target = 1; }
-    else { if (!st.closeLatched) st.target = 0; }
-    st.phase = 'tracking';
+uniform sampler2D uLayer;
+uniform vec2  uSize;        // 画布宽高（像素）
+uniform float uProgress;    // 0 = 展开，1 = 完全折上
+uniform float uBlur;        // 玻璃散射强度
+uniform float uDarkness;    // 幕布压暗强度
+uniform float uDispersion;  // 径向色散强度
+uniform float uAngleScale;  // 玻璃最大立起角比例（foldAngleDeg / 90）
+uniform vec3  uEye;         // 视点（x、y 相对屏宽/屏高，z 相对屏高）
+uniform int   uPass;        // 0 投影 / 1 横向模糊 / 2 纵向模糊 / 3 色散
+
+const float PI_2 = 1.5707963268;
+
+// 统一的层采样：显示坐标（y 向下）→ 纹理坐标（t 向上）
+vec3 layer(vec2 pos, vec2 size){
+  return texture(uLayer, vec2(pos.x / size.x, 1.0 - pos.y / size.y)).rgb;
+}
+
+// ---------- 第一趟：固定平面透视投影 ----------
+vec3 hingeGlass(vec2 pos){
+  vec2 size = uSize;
+  float angle = clamp(uProgress, 0.0, 1.0) * clamp(uAngleScale, 0.05, 1.0) * PI_2;
+  if (angle < 1e-5) return layer(pos, size);          // 参考姿态精确直通
+
+  // 幕布压暗：完全合上时顶部仍保留 40% 透过率，桌面永不熄灭
+  float curtainProgress = smoothstep(0.20, 1.0, clamp(uProgress, 0.0, 1.0));
+  float feather = 0.22;
+  float edge = mix(-feather, 0.90, curtainProgress);
+  float curtain = 1.0 - smoothstep(edge - feather, edge + feather, pos.y / size.y);
+  float visibility = 1.0 - min(0.60 * uDarkness, 0.80) * curtain;
+
+  float opticalStrength = smoothstep(0.0, 1.5 / 90.0, uProgress);
+  float d = size.y - pos.y;                            // 距底边铰链的高度
+  float eyeDistance = size.y * max(uEye.z, 1.1);
+  float sine = sin(angle), cosine = cos(angle);
+  vec3 eye = vec3(size.x * uEye.x, size.y * uEye.y, eyeDistance);
+  // 玻璃点：绕底边旋转后位于 (x, height - d·cosθ, d·sinθ)
+  vec3 glass = vec3(pos.x, size.y - d * cosine, d * sine);
+  float depth = eye.z - glass.z;
+  if (depth <= 1e-5) return vec3(0.0);
+  float rayScale = eye.z / depth;
+  vec2 hit = eye.xy + (glass.xy - eye.xy) * rayScale;  // 射线打到 z=0 平面的交点
+  float separation = d * sine;
+  float contact = smoothstep(size.y * 0.035, size.y * 0.20, d);
+  float scatter = separation * 0.070 * contact * opticalStrength * uBlur;
+  float radius = scatter / sqrt(1.0 + (scatter / 36.0) * (scatter / 36.0));
+  bool inside = all(greaterThanEqual(hit, vec2(0.0))) && all(lessThan(hit, size));
+  vec3 color = inside ? layer(hit, size) : vec3(0.0);
+  float transmission = 1.0 - min(radius * 0.0004, 0.015);
+  return color * transmission * visibility;
+}
+
+// ---------- 第二/三趟：可分离高斯（显示坐标系） ----------
+vec3 hingeGaussian(vec2 pos, vec2 dir){
+  vec2 size = uSize;
+  float d = size.y - pos.y;
+  float contact = smoothstep(size.y * 0.035, size.y * 0.20, d);
+  float optical = smoothstep(0.0, 1.5 / 90.0, uProgress);
+  float scatter = d * sin(clamp(uProgress, 0.0, 1.0) * clamp(uAngleScale, 0.05, 1.0) * PI_2) * 0.070 * contact * optical * uBlur;
+  float radius = scatter / sqrt(1.0 + (scatter / 36.0) * (scatter / 36.0));
+  if (radius < 0.35) return layer(pos, size);
+
+  float sigma = max(radius / 2.44948974, 0.15);
+  float inverseVariance = 0.5 / (sigma * sigma);
+  vec3 sum = layer(pos, size);
+  float total = 1.0;
+  vec2 upper = max(size - 0.5, vec2(0.0));
+  for (int i = 1; i <= 35; i += 2){
+    float a = float(i), b = a + 1.0;
+    float wa = exp(-a * a * inverseVariance);
+    float wb = exp(-b * b * inverseVariance);
+    float w = wa + wb;
+    if (w < 1e-7) continue;
+    float offset = (a * wa + b * wb) / w;
+    for (int s = -1; s <= 1; s += 2){
+      // 延伸边缘而不是引入暗色采样边框
+      vec2 q = clamp(pos + dir * (float(s) * offset), vec2(0.0), upper);
+      sum += layer(q, size) * w;
+    }
+    total += 2.0 * w;
   }
-  // 4) 跟到端点 → 序列自然结束，交回正常画面
-  if (st.phase === 'tracking' && st.target !== null &&
-      ((st.target >= 1 && st.progress >= 1) || (st.target <= 0 && st.progress <= 0))) return finish(st.target);
-  // 5) 停顿判定 → 加速补完剩余片段（拖拽中或关闭自动补完时不做）
-  if (st.phase === 'tracking' && st.target !== null && cfg.autoFinish && !holding &&
-      t - st.lastMoveT >= cfg.stallMs) startCatch(t);
-}
-function startCatch(t) {
-  const remain = Math.abs(st.target - st.progress);
-  if (remain < 0.002) return finish(st.target);
-  const seconds = Math.max(cfg.clip * remain / Math.max(cfg.speed, .05), cfg.minCatch / 1000);
-  st.catchRate = remain / seconds; st.catchTarget = st.target; st.catchAt = t; st.phase = 'catchUp';
-}
-function tickCatch(t) {
-  if (st.phase !== 'catchUp') return;
-  const dt = Math.min((t - st.catchAt) / 1000, .05); st.catchAt = t;
-  const dir = st.catchTarget > st.progress ? 1 : -1;
-  st.progress += dir * st.catchRate * dt;
-  if ((dir > 0 && st.progress >= st.catchTarget) || (dir < 0 && st.progress <= st.catchTarget)) return finish(st.catchTarget);
-}
-function finish(target) {
-  if (target >= 1) { st.openLatched = true; st.closeLatched = false; }
-  else { st.closeLatched = true; st.openLatched = false; }
-  st.target = null; st.phase = 'idle'; st.progress = target >= 1 ? 1 : 0;
-}
-const clamp = (v, a, b) => Math.min(Math.max(v, a), b);
-
-/* =========================================================================
- * 2) Duo Continuity 渲染：折叠透视 + 渐进模糊遮罩 + 连续流转
- * ========================================================================= */
-const $ = id => document.getElementById(id);
-const stage = $('stage'), lid = $('lid'), deck = $('deck'), refl = $('refl');
-// 铰链位置（距屏幕顶边的像素距离）→ 上屏 / 下屏高度；写入 CSS 变量供内部图层撑满整屏
-function layout() {
-  const H = stage.clientHeight;
-  cfg.lidH = H * cfg.hingeRatio;
-  cfg.deckH = H - cfg.lidH;
-  const root = document.documentElement.style;
-  root.setProperty('--stage-h', H + 'px');
-  root.setProperty('--lid-h', cfg.lidH + 'px');
-  root.setProperty('--deck-h', cfg.deckH + 'px');
-}
-layout();
-window.addEventListener('resize', layout);
-
-const PHASE_TEXT = { idle: '待机（正常桌面）', tracking: '跟随角度', catchUp: '停顿 · 加速补完' };
-
-function render() {
-  const p = clamp(st.progress, 0, 1), closed = 1 - p;
-  const active = st.phase !== 'idle';
-
-  // 交接曲线：两端淡出，动画结束瞬间与真实桌面无缝衔接
-  const edge = 0.12;
-  const presence = active ? Math.min(1, Math.min(p / edge, closed / edge)) : 0;
-  const fold = closed * cfg.foldDeg;
-
-  // 铰链线位置：上屏（会翻动）+ 下屏（键盘侧，平放）
-  const H = stage.clientHeight, lidH = H * cfg.hingeRatio, deckH = H - lidH;
-  lid.style.height = lidH + 'px';
-  deck.style.top = lidH + 'px';
-  deck.style.height = deckH + 'px';
-  lid.style.opacity = presence; deck.style.opacity = presence;
-  // 上屏绕底部铰链线翻动：0° = 掀开贴合屏面，foldDeg = 扣到键盘面（CSS 取负角度）
-  lid.style.transform = `rotateX(${-fold}deg)`;
-
-  // 渐进模糊：越闭合模糊带越宽，自铰链线向屏顶扩散
-  const extent = (0.16 + 0.62 * p);
-  const levels = [extent, extent * 0.60, extent * 0.28];
-  applyMasks(lid, levels, 'to top');     // 铰链在下，越往上越模糊
-
-  // 画面连续流转：鬼影向远离铰链的方向漂移 + 轻微拉伸
-  ghost(lid, closed * 0.04 * H, closed);
-  // 下屏倒影：越打开（屏越亮）倒影越明显
-  refl.style.opacity = 0.10 + 0.26 * p;
-  // 铰链线辉光与色散
-  $('scrim').style.opacity = presence * 0.9;
-  $('hinge').style.top = lidH + 'px';
-  $('hinge').style.opacity = presence * (0.28 + 0.72 * closed);
-  const ca = (0.10 + 0.55 * closed);
-  $('cy').style.top = (lidH - 3) + 'px'; $('cy').style.opacity = ca;
-  $('mg').style.top = (lidH + 1) + 'px'; $('mg').style.opacity = ca * 0.85;
-  // 横向高光带自铰链线向屏顶扫过（与“掀开”方向一致）
-  $('sweep').style.top = (lidH * (1 - p) - 100) + 'px';
-  $('sweep').style.opacity = presence;
-
-  $('badge').textContent = `进度 ${Math.round(p * 100)}%`;
-  $('hud').textContent = `${PHASE_TEXT[st.phase]}　进度 ${(p * 100).toFixed(0)}%`;
-  $('phase').textContent = PHASE_TEXT[st.phase];
-  $('phase').className = 'pill' + (st.phase === 'catchUp' ? ' ok' : '');
+  return sum / total;
 }
 
-// 3 级模糊副本的遮罩：n 之前不透明（显示模糊），之后透明（露出下一层）
-function applyMasks(panel, levels, dir) {
-  const soft = 7;
-  panel.querySelectorAll('.layer.blur-fine, .layer.blur-mid, .layer.blur-wide').forEach((el, i) => {
-    const n = clamp(levels[i] * 100, 2, 98.5);
-    const g = `linear-gradient(${dir}, #000 0%, #000 ${Math.max(n - soft, 0)}%, transparent ${Math.min(n + soft, 100)}%, transparent 100%)`;
-    el.style.webkitMaskImage = g; el.style.maskImage = g;
+// ---------- 第四趟：围绕底部中点铰链的径向色散 ----------
+vec3 hingeChromatic(vec2 pos){
+  vec3 center = layer(pos, uSize);
+  float closing = clamp(uProgress, 0.0, 1.0);
+  if (uDispersion <= 0.0 || closing <= 0.0) return center;
+
+  vec2 size = max(uSize, vec2(1.0));
+  float h = clamp((size.y - pos.y) / size.y, 0.0, 1.0);
+  float contact = smoothstep(0.035, 0.20, h);
+  float onset = smoothstep(0.0, 2.5 / 90.0, closing);
+  float amount = min(size.y * 0.009, 10.0) * clamp(uDispersion, 0.0, 1.0)
+               * sin(closing * PI_2) * onset * contact * pow(h, 1.35);
+  if (amount < 0.001) return center;
+
+  // 窄接触带保持中性，顶部与外缘分离增大
+  vec2 radial = vec2((pos.x / size.x - 0.5) * 0.65, -h);
+  vec2 offset = radial / max(length(radial), 0.0001) * amount;
+  vec2 upper = max(size - 0.5, vec2(0.0));
+  vec2 rp = clamp(pos + offset, vec2(0.0), upper);
+  vec2 bp = clamp(pos - offset, vec2(0.0), upper);
+  return vec3(layer(rp, size).r, center.g, layer(bp, size).b);
+}
+
+void main(){
+  vec2 pos = vUv * uSize;
+  vec3 c;
+  if (uPass == 0) c = hingeGlass(pos);
+  else if (uPass == 1) c = hingeGaussian(pos, vec2(1.0, 0.0));
+  else if (uPass == 2) c = hingeGaussian(pos, vec2(0.0, 1.0));
+  else c = hingeChromatic(pos);
+  outColor = vec4(c, 1.0);
+}`;
+
+// ---------------- 视觉预设（与 Config.swift 的 styleBlur/Darkness/Dispersion 一致） ----------------
+const STYLES = {
+  clear:     { blur: 0.25, darkness: 0.2, dispersion: 0.0 },
+  frosted:   { blur: 1.0,  darkness: 1.0, dispersion: 0.0 },
+  cinematic: { blur: 1.3,  darkness: 1.2, dispersion: 1.0 },
+};
+const VIEWPOINTS = { desk: [0.5, 0.35, 2.8], front: [0.5, 0.5, 2.8] };
+
+// ---------------- 合成「桌面」源图（让模糊/色散/透视都看得出来） ----------------
+function drawDesktop(ctx, w, h){
+  // 壁纸渐变
+  const g = ctx.createLinearGradient(0, 0, w, h);
+  g.addColorStop(0, "#1b2a4a"); g.addColorStop(0.45, "#3a2b5e"); g.addColorStop(1, "#0d1526");
+  ctx.fillStyle = g; ctx.fillRect(0, 0, w, h);
+  // 光晕
+  const halo = ctx.createRadialGradient(w * 0.72, h * 0.22, 0, w * 0.72, h * 0.22, Math.max(w, h) * 0.6);
+  halo.addColorStop(0, "rgba(120,150,255,.35)"); halo.addColorStop(1, "rgba(0,0,0,0)");
+  ctx.fillStyle = halo; ctx.fillRect(0, 0, w, h);
+  // 桌面网格：提供大量细小高频细节，用来检验散射与色散是否生效
+  ctx.strokeStyle = "rgba(255,255,255,.06)"; ctx.lineWidth = 1;
+  for (let x = 0; x < w; x += 40){ ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke(); }
+  for (let y = 0; y < h; y += 40){ ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke(); }
+  // 一个「窗口」
+  const wx = w * 0.10, wy = h * 0.16, ww = w * 0.62, wh = h * 0.56;
+  ctx.fillStyle = "rgba(14,18,28,.92)"; ctx.fillRect(wx, wy, ww, wh);
+  ctx.fillStyle = "rgba(40,48,66,.98)"; ctx.fillRect(wx, wy, ww, 30);
+  ["#ff5f57", "#febc2e", "#28c840"].forEach((c, i) => {
+    ctx.fillStyle = c; ctx.beginPath(); ctx.arc(wx + 18 + i * 18, wy + 15, 6, 0, Math.PI * 2); ctx.fill();
   });
-}
-function ghost(panel, dy, closed) {
-  const g = panel.querySelector('.ghost');
-  g.style.opacity = 0.09 + 0.18 * closed;
-  // 向远离铰链的方向（上）漂移，位移量即为像素值
-  g.style.transform = `translateY(${-dy}px) scale(1,1.02)`;
+  ctx.fillStyle = "rgba(220,228,245,.92)";
+  ctx.font = "600 15px -apple-system,Segoe UI,sans-serif";
+  ctx.fillText("MacKZ · Duo Continuity", wx + 20, wy + 62);
+  // 小字：模糊强度一眼可辨
+  ctx.fillStyle = "rgba(190,202,225,.85)"; ctx.font = "12px -apple-system,Segoe UI,sans-serif";
+  const lines = ["进度 = (开始折叠角 − 铰链角度) ÷ 区间",
+                 "桌面固定在 z=0 平面；虚拟玻璃绕底边铰链立起",
+                 "每个像素向桌面平面求交采样 → 折倒视错觉",
+                 "停顿后自动加速补完，不需要开到极限角度",
+                 "Resolution 3024 × 1964 · 254 ppi"];
+  lines.forEach((t, i) => ctx.fillText(t, wx + 20, wy + 90 + i * 19));
+  // Dock
+  const dw = ww * 0.55, dx = wx + 30, dy = wy + wh - 62;
+  ctx.fillStyle = "rgba(255,255,255,.14)"; 
+  ctx.beginPath(); ctx.roundRect(dx, dy, dw, 46, 12); ctx.fill();
+  ["#5a68ff", "#ff7a59", "#33c37d", "#f3c065", "#b06bff"].forEach((c, i) => {
+    ctx.fillStyle = c;
+    ctx.beginPath(); ctx.roundRect(dx + 12 + i * 40, dy + 10, 26, 26, 6); ctx.fill();
+  });
+  // 底部细横线：检验色散是否出现彩边
+  ctx.fillStyle = "rgba(255,255,255,.9)";
+  for (let i = 0; i < 3; i++) ctx.fillRect(w * 0.10, h - 66 + i * 14, w * 0.30, 2);
 }
 
-/* 模拟屏幕内容：给每个面板的复制层填入同一份 UI 结构（真实端用截屏图替换） */
-function buildScreenContent(el) {
-  el.innerHTML = `
-    <div class="screen">
-      <div class="bar" style="top:34px;width:38%"></div>
-      <div class="bar" style="top:58px;width:62%;opacity:.7"></div>
-      <div class="blk" style="left:22px;top:96px;width:44%;height:96px"></div>
-      <div class="blk" style="left:52%;top:96px;width:26%;height:96px"></div>
-      <div class="blk" style="left:22px;top:208px;width:78%;height:52px"></div>
-      <div class="t" style="left:34px;top:132px">Duo Continuity</div>
-      <div class="t" style="left:34px;top:160px;opacity:.6;font-size:11px">hinge-driven transition</div>
-      <div class="t" style="left:22px;top:272px;opacity:.5;font-size:11px">MacKZ · Global Overlay</div>
-    </div>`;
-}
-document.querySelectorAll('.lid .layer, .lid .ghost, .deck .refl').forEach(buildScreenContent);
+// ---------------- WebGL 初始化（不可用时降级到 CPU 同公式渲染） ----------------
+const canvas = document.getElementById("stage");
+const canvas2d = document.getElementById("stage2d");
+const gl = canvas.getContext("webgl2", { antialias: false, premultipliedAlpha: false });
+const diag = document.getElementById("diag");
+let mode = gl ? "webgl" : "cpu";
 
-/* =========================================================================
- * 3) 主循环：真实传感器与模拟滑块共用
- * ========================================================================= */
-function loop(now) {
-  if (st.phase === 'catchUp') tickCatch(now);            // 加速阶段由时间轴推进
-  if (!hid.connected) update(parseFloat($('angle').value), now);   // 模拟模式：滑块即铰链
+const U = {};
+let prog = null;
+if (gl) {
+  const compile = (type, src) => {
+    const s = gl.createShader(type);
+    gl.shaderSource(s, src); gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
+    return s;
+  };
+  prog = gl.createProgram();
+  gl.attachShader(prog, compile(gl.VERTEX_SHADER, VERT));
+  gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, FRAG));
+  gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog));
+  gl.useProgram(prog);
+  ["uLayer","uSize","uProgress","uBlur","uDarkness","uDispersion","uAngleScale","uEye","uPass"]
+    .forEach(n => U[n] = gl.getUniformLocation(prog, n));
+}
+
+// 源图纹理 / 低分辨率源图（CPU 模式用）
+const srcCanvas = document.createElement("canvas");
+const srcCtx = srcCanvas.getContext("2d");
+const srcTex = gl ? gl.createTexture() : null;
+let W = 0, H = 0;
+const texA = gl ? gl.createTexture() : null, texB = gl ? gl.createTexture() : null;
+const fbA = gl ? gl.createFramebuffer() : null, fbB = gl ? gl.createFramebuffer() : null;
+const state = { angle: 90, trigger: 90, close: 0, style: "frosted", viewpoint: "desk", foldAngle: 90 };
+
+function makeTarget(tex, w, h){
+  gl.bindTexture(gl.TEXTURE_2D, tex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+}
+function attach(fb, tex){ gl.bindFramebuffer(gl.FRAMEBUFFER, fb); gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0); }
+
+function resize(){
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const cssW = canvas.clientWidth || canvas2d.clientWidth || 1000;
+  const w = Math.max(2, Math.round(cssW * dpr));
+  const h = Math.max(2, Math.round(w * 625 / 1000));
+  if (w === W && h === H) return;
+  W = w; H = h;
+  canvas.width = w; canvas.height = h;
+  canvas2d.width = w; canvas2d.height = h;
+  srcCanvas.width = w; srcCanvas.height = h;
+  drawDesktop(srcCtx, w, h);
+  cpu = null;                                          // 尺寸变了，低分辨率缓冲需重建
+
+  if (!gl) return;
+  gl.bindTexture(gl.TEXTURE_2D, srcTex);
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);       // 源图顶部 → t=1，与 FBO 约定一致
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, srcCanvas);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+  makeTarget(texA, w, h); attach(fbA, texA);
+  makeTarget(texB, w, h); attach(fbB, texB);
+}
+
+/** 一趟渲染：把 layer 画到 target（null = 屏幕） */
+function pass(index, layerTex, targetFB){
+  gl.bindFramebuffer(gl.FRAMEBUFFER, targetFB);
+  gl.viewport(0, 0, W, H);
+  gl.activeTexture(gl.TEXTURE0);
+  gl.bindTexture(gl.TEXTURE_2D, layerTex);
+  gl.uniform1i(U.uLayer, 0);
+  gl.uniform2f(U.uSize, W, H);
+  gl.uniform1f(U.uProgress, progress());
+  gl.uniform1f(U.uBlur, STYLES[state.style].blur);
+  gl.uniform1f(U.uDarkness, STYLES[state.style].darkness);
+  gl.uniform1f(U.uDispersion, STYLES[state.style].dispersion);
+  gl.uniform1f(U.uAngleScale, Math.min(Math.max(state.foldAngle, 5), 90) / 90);
+  const eye = VIEWPOINTS[state.viewpoint];
+  gl.uniform3f(U.uEye, eye[0], eye[1], eye[2]);
+  gl.uniform1i(U.uPass, index);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+}
+
+/** 进度映射：与 HingeAnimationEngine.progress(for:) 完全一致 */
+function progress(){
+  const span = state.trigger - state.close;
+  if (Math.abs(span) < 1e-4) return 0;
+  return Math.min(Math.max((state.trigger - state.angle) / span, 0), 1);
+}
+
+// ================= CPU 降级渲染（无 WebGL2 时启用） =================
+// 与 GLSL 完全相同的公式，只是把画布降采样后逐像素在 JS 里算，再双线性放大回显示画布。
+// 所有「像素量纲」的常数仍按全分辨率取值，因此观感与 GPU 版一致，只是分辨率低一些。
+const CPU_SCALE = 0.14;
+let cpu = null;
+
+function cpuPrepare(){
+  const sw = Math.min(Math.max(Math.round(W * CPU_SCALE), 96), 150);
+  const sh = Math.max(16, Math.round(sw * H / W));
+  const srcSmall = document.createElement("canvas");
+  srcSmall.width = sw; srcSmall.height = sh;
+  const sctx = srcSmall.getContext("2d");
+  sctx.drawImage(srcCanvas, 0, 0, sw, sh);            // 全分辨率桌面 → 低分辨率源
+
+  // ImageData 是 RGBA 四通道；这里统一转成 3 通道浮点，避免后面按 3 字节跨距采样时错位
+  const rgba = sctx.getImageData(0, 0, sw, sh).data;
+  const rgb = new Float32Array(sw * sh * 3);
+  for (let i = 0, j = 0; i < rgba.length; i += 4, j += 3){
+    rgb[j] = rgba[i]; rgb[j + 1] = rgba[i + 1]; rgb[j + 2] = rgba[i + 2];
+  }
+
+  const out = document.createElement("canvas");
+  out.width = sw; out.height = sh;
+  const octx = out.getContext("2d");
+
+  cpu = {
+    sw, sh,
+    lsx: W / sw,                                      // 每个低分辨率像素对应的全分辨率宽度
+    lsy: H / sh,
+    src: rgb,
+    a: new Float32Array(sw * sh * 3),
+    b: new Float32Array(sw * sh * 3),
+    img: octx.createImageData(sw, sh),
+    octx, out,
+  };
+}
+
+/** 低分辨率 RGB 缓冲按最近邻采样（fx、fy 为全分辨率坐标），三通道跨距 */
+function cpuIndex(fx, fy){
+  let x = Math.round(fx / cpu.lsx), y = Math.round(fy / cpu.lsy);
+  x = x < 0 ? 0 : (x >= cpu.sw ? cpu.sw - 1 : x);
+  y = y < 0 ? 0 : (y >= cpu.sh ? cpu.sh - 1 : y);
+  return (y * cpu.sw + x) * 3;
+}
+
+function renderCPU(){
+  if (!cpu) cpuPrepare();
+  const { sw, sh, lsx, lsy, src, a, b } = cpu;
+  const sizeY = H, sizeX = W;
+  const p = progress();
+  const blur = STYLES[state.style].blur;
+  const dark = STYLES[state.style].darkness;
+  const disp = STYLES[state.style].dispersion;
+  const eyeCfg = VIEWPOINTS[state.viewpoint];
+  const angleScale = Math.min(Math.max(state.foldAngle, 5), 90) / 90;
+  const angle = Math.min(Math.max(p, 0), 1) * angleScale * Math.PI / 2;
+
+  // ---------- 第一趟：固定平面透视投影 ----------
+  const flat = angle < 1e-5;
+  const curtainProgress = smoothstep(0.20, 1.0, Math.min(Math.max(p, 0), 1));
+  const feather = 0.22;
+  const edge = (-feather) + (0.90 - (-feather)) * curtainProgress;
+  const opticalStrength = smoothstep(0, 1.5 / 90, p);
+  const eyeDistance = sizeY * Math.max(eyeCfg[2], 1.1);
+  const eyeX = sizeX * eyeCfg[0], eyeY = sizeY * eyeCfg[1];
+  const sine = Math.sin(angle), cosine = Math.cos(angle);
+
+  for (let y = 0; y < sh; y++){
+    const py = (y + 0.5) * lsy;
+    const d = sizeY - py;                             // 距底边铰链的高度
+    const contact = smoothstep(sizeY * 0.035, sizeY * 0.20, d);
+    const separation = d * sine;
+    const scatter = separation * 0.070 * contact * opticalStrength * blur;
+    const radius = scatter / Math.sqrt(1 + (scatter / 36) * (scatter / 36));
+    const transmission = 1 - Math.min(radius * 0.0004, 0.015);
+    const curtain = 1 - smoothstep(edge - feather, edge + feather, py / sizeY);
+    const visibility = 1 - Math.min(0.60 * dark, 0.80) * curtain;
+
+    for (let x = 0; x < sw; x++){
+      const o = (y * sw + x) * 3;
+      if (flat){                                      // 参考姿态：直通
+        const si = o;
+        a[o] = src[si]; a[o + 1] = src[si + 1]; a[o + 2] = src[si + 2];
+        continue;
+      }
+      const px = (x + 0.5) * lsx;
+      const gz = d * sine;
+      const depth = eyeDistance - gz;
+      if (depth <= 1e-5){ a[o] = a[o + 1] = a[o + 2] = 0; continue; }
+      const rayScale = eyeDistance / depth;
+      const hx = eyeX + (px - eyeX) * rayScale;
+      const hy = eyeY + ((sizeY - d * cosine) - eyeY) * rayScale;
+      let r = 0, g = 0, bl = 0;
+      if (hx >= 0 && hx < sizeX && hy >= 0 && hy < sizeY){
+        const si = cpuIndex(hx, hy);
+        r = src[si]; g = src[si + 1]; bl = src[si + 2];
+      }
+      a[o] = r * transmission * visibility;
+      a[o + 1] = g * transmission * visibility;
+      a[o + 2] = bl * transmission * visibility;
+    }
+  }
+
+  // ---------- 第二/三趟：可分离高斯 ----------
+  cpuGaussian(a, b, 1);        // 横向
+  cpuGaussian(b, a, 0);        // 纵向
+
+  // ---------- 输出：色散（可选）+ 双线性放大 ----------
+  const data = cpu.img.data;                          // ImageData 为 RGBA 四通道
+  for (let y = 0; y < sh; y++){
+    for (let x = 0; x < sw; x++){
+      const o = (y * sw + x) * 3;                     // 浮点缓冲：三通道
+      const q = (y * sw + x) * 4;                     // 输出 ImageData：四通道
+      let r = a[o], g = a[o + 1], bl = a[o + 2];
+      if (disp > 0 && p > 0){
+        const px = (x + 0.5) * lsx, py = (y + 0.5) * lsy;
+        const h = Math.min(Math.max((sizeY - py) / sizeY, 0), 1);
+        const contact = smoothstep(0.035, 0.20, h);
+        const onset = smoothstep(0, 2.5 / 90, p);
+        const amount = Math.min(sizeY * 0.009, 10) * disp * Math.sin(p * Math.PI / 2)
+                     * onset * contact * Math.pow(h, 1.35);
+        if (amount > 0.001){
+          const rx = (px / sizeX - 0.5) * 0.65, ry = -h;
+          const len = Math.max(Math.hypot(rx, ry), 0.0001);
+          const ox = rx / len * amount, oy = ry / len * amount;
+          const ri = cpuIndex(px + ox, py + oy);
+          const bi = cpuIndex(px - ox, py - oy);
+          r = a[ri]; bl = a[bi + 2];
+        }
+      }
+      data[q] = r; data[q + 1] = g; data[q + 2] = bl; data[q + 3] = 255;
+    }
+  }
+  cpu.octx.putImageData(cpu.img, 0, 0);
+  const ctx = canvas2d.getContext("2d");
+  ctx.imageSmoothingEnabled = true;
+  ctx.clearRect(0, 0, W, H);
+  ctx.drawImage(cpu.out, 0, 0, W, H);                 // 低分辨率结果平滑放大
+}
+
+/** 可分离高斯：dirX = 1 横向 / 0 纵向 */
+function cpuGaussian(from, to, dirX){
+  const { sw, sh, lsx, lsy } = cpu;
+  const p = progress();
+  const blur = STYLES[state.style].blur;
+  const optical = smoothstep(0, 1.5 / 90, p);
+  const stepScale = dirX ? lsx : lsy;                 // 全分辨率像素 → 低分辨率像素
+  const angleScale = Math.min(Math.max(state.foldAngle, 5), 90) / 90;
+  const sizeY = H;
+
+  for (let y = 0; y < sh; y++){
+    const py = (y + 0.5) * lsy;
+    const d = sizeY - py;
+    const contact = smoothstep(sizeY * 0.035, sizeY * 0.20, d);
+    const scatter = d * Math.sin(Math.min(Math.max(p, 0), 1) * angleScale * Math.PI / 2) * 0.070 * contact * optical * blur;
+    const radius = scatter / Math.sqrt(1 + (scatter / 36) * (scatter / 36));
+
+    for (let x = 0; x < sw; x++){
+      const o = (y * sw + x) * 3;
+      if (radius < 0.35){
+        to[o] = from[o]; to[o + 1] = from[o + 1]; to[o + 2] = from[o + 2];
+        continue;
+      }
+      const sigma = Math.max(radius / 2.44948974, 0.15);
+      const invVar = 0.5 / (sigma * sigma);
+      let sr = from[o], sg = from[o + 1], sb = from[o + 2];
+      let total = 1;
+      for (let i = 1; i <= 35; i += 2){
+        const aa = i, bb = i + 1;
+        const wa = Math.exp(-aa * aa * invVar), wb = Math.exp(-bb * bb * invVar);
+        const w = wa + wb;
+        if (w < 1e-7) continue;
+        const offset = (aa * wa + bb * wb) / w;
+        const step = offset / stepScale;              // 低分辨率像素偏移
+        for (let s = -1; s <= 1; s += 2){
+          let qx = x, qy = y;
+          if (dirX) qx = Math.min(Math.max(x + s * step, 0), sw - 1);
+          else      qy = Math.min(Math.max(y + s * step, 0), sh - 1);
+          const qi = (Math.round(qy) * sw + Math.round(qx)) * 3;
+          sr += from[qi] * w; sg += from[qi + 1] * w; sb += from[qi + 2] * w;
+        }
+        total += 2 * w;
+      }
+      to[o] = sr / total; to[o + 1] = sg / total; to[o + 2] = sb / total;
+    }
+  }
+}
+
+function smoothstep(e0, e1, x){
+  const t = Math.min(Math.max((x - e0) / (e1 - e0), 0), 1);
+  return t * t * (3 - 2 * t);
+}
+
+function render(){
+  resize();
+  if (mode === "webgl") renderWebGL(); else renderCPU();
+  updateHud(progress());
+}
+
+function renderWebGL(){
+  canvas2d.style.display = "none";
+  canvas.style.display = "";
+  const p = progress();
+  const disp = STYLES[state.style].dispersion;
+  // 完全展开：投影即恒等直通，直接呈现原图（等价于 Mac 端隐藏覆盖层）
+  if (p <= 0.0001){
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(0, 0, W, H);
+    gl.clearColor(0, 0, 0, 1); gl.clear(gl.COLOR_BUFFER_BIT);
+    pass(0, srcTex, null);
+  } else {
+    pass(0, srcTex, fbA);          // 投影 → A
+    pass(1, texA, fbB);            // 横向模糊 → B
+    if (disp > 0){
+      pass(2, texB, fbA);          // 纵向模糊 → A
+      pass(3, texA, null);         // 径向色散 → 屏幕
+    } else {
+      pass(2, texB, null);         // 无风格色散：纵向模糊直接落屏
+    }
+  }
+}
+
+// 把 CPU 模式的渲染分支接进主循环：CPU 时隐藏 WebGL 画布
+function showCPUBranch(){
+  if (mode !== "cpu") return;
+  canvas.style.display = "none";
+  canvas2d.style.display = "";
+  const hint = document.getElementById("modeHint");
+  if (hint) hint.textContent = "当前浏览器不可用 WebGL2，已自动切换为 CPU 同公式降级渲染（分辨率较低，观感与 GPU 版一致）。";
+}
+
+// ---------------- 状态机（与 Swift 端同构：跟随 / 停顿 / 加速补完） ----------------
+const SIM = { stallMs: 350, speed: 3.0, clip: 0.6, minCatchUpMs: 120 };
+let phase = "待机";
+let anim = null;      // { kind, from, to, start, dur, then }
+let stallAt = null;   // 停手后开始计时的时刻
+let lastDir = 0;      // 最近一次移动方向：+1 掀开（进度↓） / -1 合上（进度↑）
+
+function updateHud(p){
+  document.getElementById("angleVal").textContent = state.angle.toFixed(1) + "°";
+  document.getElementById("progressPill").textContent = "折叠进度 " + Math.round(p * 100) + "%";
+  const pill = document.getElementById("phasePill");
+  pill.textContent = phase;
+  pill.className = "pill " + (phase === "加速补完" ? "warn" : phase === "跟随角度" ? "ok" : "");
+  const warn = document.getElementById("warnPill");
+  if (state.trigger - state.close < 1){
+    warn.style.display = ""; warn.className = "pill warn";
+    warn.textContent = "开始折叠角必须大于完全合上角";
+  } else warn.style.display = "none";
+  diag.textContent = `渲染 ${mode === "webgl" ? "GPU(WebGL2)" : "CPU 降级"} · 进度 ${p.toFixed(4)} · 角度 ${state.angle.toFixed(1)}° · 触发角 ${state.trigger}° · 风格 ${state.style}`;
+}
+
+// 启动：无 WebGL2 时切到第二块画布
+showCPUBranch();
+
+function tick(now){
+  if (anim){
+    const k = Math.min((now - anim.start) / anim.dur, 1);
+    const eased = k * k * (3 - 2 * k);
+    state.angle = anim.from + (anim.to - anim.from) * eased;
+    document.getElementById("angle").value = state.angle;
+    if (k >= 1){
+      const after = anim.then; anim = null;
+      if (after) after();
+    }
+  }
+  // 停顿判定 → 加速补完（抬到一半停手 → 加速回到展开）
+  if (!anim && stallAt !== null){
+    if (now - stallAt >= SIM.stallMs){
+      const p = progress();
+      // 停顿后补完的方向 = 最后移动方向：掀开则回到展开(0)，合上则折到底(1)
+      const target = lastDir < 0 ? 1 : 0;
+      const remaining = Math.abs(target - p);
+      stallAt = null;
+      phase = "加速补完";
+      if (remaining > 0.002){
+        const seconds = Math.max(SIM.clip * remaining / SIM.speed, SIM.minCatchUpMs / 1000);
+        anim = { from: state.angle, to: state.close + (1 - target) * (state.trigger - state.close),
+                 start: now, dur: seconds * 1000, then: () => { phase = "待机"; } };
+      } else {
+        state.angle = state.close + (1 - target) * (state.trigger - state.close);
+        phase = "待机";
+      }
+    }
+  }
   render();
-  requestAnimationFrame(loop);
-}
-requestAnimationFrame(loop);
-
-/* =========================================================================
- * 4) WebHID 真机铰链读取（需要用户手势授权）
- * ========================================================================= */
-const hid = { device: null, connected: false, offset: 0, auto: true, buf: [] };
-
-$('connect').addEventListener('click', async () => {
-  if (!('hid' in navigator)) {
-    setHid('err', '浏览器不支持 WebHID（请用 Chrome/Edge，且页面为 https 或 localhost）');
-    return;
-  }
-  try {
-    setHid('warn', '等待授权…');
-    // 关键：按「传感器」用途页(0x0020)过滤，铰链角度传感器就在该类别下
-    const devices = await navigator.hid.requestDevice({
-      filters: [{ usagePage: 0x0020 }]
-    });
-    if (!devices.length) { setHid('warn', '未选择设备'); return; }
-    const dev = devices[0];
-    if (!dev.opened) await dev.open();
-    hid.device = dev; hid.connected = true;
-    dev.addEventListener('inputreport', onReport);
-    setHid('ok', `已连接：${dev.productName || 'HID 设备'}`);
-    $('hidHint').textContent = '自动识别中';
-  } catch (e) {
-    setHid('err', '授权失败：' + (e && e.message ? e.message : e));
-  }
-});
-
-$('useSim').addEventListener('click', async () => {
-  if (hid.device && hid.device.opened) { try { await hid.device.close(); } catch (_) {} }
-  hid.device = null; hid.connected = false;
-  setHid('warn', '模拟模式（滑块即铰链）');
-  st.phase = 'idle'; st.progress = 0; st.raw = null; st.lastAngle = null; st.target = null;
-});
-
-// 解析输入报文：Apple 角度传感器为 float32 小端，偏移在不同固件上可能不同 → 自动识别
-function onReport(ev) {
-  const dv = ev.data;
-  const bytes = [];
-  for (let i = 0; i < dv.byteLength; i++) bytes.push(dv.getUint8(i));
-  const hex = bytes.map(b => b.toString(16).padStart(2, '0')).join(' ');
-  hid.buf.push(hex); if (hid.buf.length > 6) hid.buf.shift();
-  $('hex').textContent = 'reportId=' + ev.reportId + ' | ' + hid.buf.join('   ');
-
-  const off = hid.auto ? findAngleOffset(dv) : hid.offset;
-  if (off == null) return;
-  if (hid.auto && off !== hid.offset) { hid.offset = off; $('offset').value = off; $('offsetVal').textContent = off; $('hidHint').textContent = '已自动识别偏移 ' + off; }
-  const angle = dv.getFloat32(off, true);
-  if (!isFinite(angle)) return;
-  $('angleVal').textContent = angle.toFixed(1) + '°';
-  $('hidHint').textContent = `实时 ${angle.toFixed(2)}°`;
-  update(angle, performance.now());     // 真实数据直接进同一条状态机通路
+  requestAnimationFrame(tick);
 }
 
-// 自动识别：扫描所有 4 字节窗口，取落在 0~180 且值稳定的 float32 偏移
-function findAngleOffset(dv) {
-  for (let o = 0; o + 4 <= dv.byteLength; o++) {
-    const v = dv.getFloat32(o, true);
-    if (isFinite(v) && v >= 0 && v <= 180 && Math.abs(v) < 200) return o;
-  }
-  // 退一步：尝试 uint16 小端（部分固件按定点上报）
-  for (let o = 0; o + 2 <= dv.byteLength; o++) {
-    const v = dv.getUint16(o, true);
-    if (v >= 0 && v <= 18000 && v > 0) return o;   // 需要外部确认后再用
-  }
-  return null;
+// ---------------- 交互 ----------------
+const angleEl = document.getElementById("angle");
+const triggerEl = document.getElementById("trigger");
+
+angleEl.addEventListener("input", () => {
+  const v = parseFloat(angleEl.value);
+  if (v > state.angle) lastDir = 1;
+  else if (v < state.angle) lastDir = -1;
+  state.angle = v;
+  anim = null;
+  phase = "跟随角度";
+  // 有角度变化 → 取消加速补完，重新跟随，并重置停顿计时
+  stallAt = performance.now();
+});
+triggerEl.addEventListener("input", () => {
+  state.trigger = parseFloat(triggerEl.value);
+  document.getElementById("triggerVal").textContent = state.trigger + "°";
+});
+const foldAngleEl = document.getElementById("foldAngle");
+foldAngleEl.addEventListener("input", () => {
+  state.foldAngle = parseFloat(foldAngleEl.value);
+  document.getElementById("foldAngleVal").textContent = state.foldAngle + "°";
+});
+document.getElementById("style").addEventListener("change", e => state.style = e.target.value);
+document.getElementById("viewpoint").addEventListener("change", e => state.viewpoint = e.target.value);
+
+/** 还原初始角度并开始一段脚本动画 */
+function script(from, to, durMs, then){
+  state.angle = from;
+  document.getElementById("angle").value = from;
+  lastDir = to > from ? 1 : -1;
+  anim = { from, to, start: performance.now(), dur: durMs, then };
+  phase = "跟随角度";
+  stallAt = null;
 }
 
-$('offset').addEventListener('input', e => {
-  hid.offset = +e.target.value; hid.auto = false;
-  $('offsetVal').textContent = e.target.value;
-  $('hidHint').textContent = '手动偏移 ' + e.target.value;
-});
+document.getElementById("btnStallOpen").onclick = () => {
+  // 合上到 55°（进度约 0.39）后停手 → 350ms 后自动加速回到完全展开
+  script(state.close + 5, 55, 900, () => { stallAt = performance.now(); phase = "跟随角度"; });
+};
+document.getElementById("btnStallClose").onclick = () => {
+  // 从 130° 合到 45° 后停手 → 自动加速折到底
+  script(state.trigger + 40, 45, 900, () => { stallAt = performance.now(); phase = "跟随角度"; });
+};
+document.getElementById("btnDemo").onclick = () => {
+  script(state.trigger + 40, state.close, 1200, () => {
+    script(state.close, state.trigger + 40, 1200, () => { phase = "待机"; });
+  });
+};
 
-function setHid(kind, text) {
-  const el = $('hidState');
-  el.textContent = text;
-  el.className = 'pill' + (kind === 'ok' ? ' ok' : kind === 'warn' ? ' warn' : kind === 'err' ? ' err' : '');
-}
-
-/* =========================================================================
- * 5) 参数与演示控件
- * ========================================================================= */
-$('angle').addEventListener('input', e => {
-  $('angleVal').textContent = e.target.value + '°';
-  if (hid.connected) return;
-  update(parseFloat(e.target.value), performance.now());   // 手动拖也无延迟反馈
-});
-$('stall').addEventListener('input', e => { cfg.stallMs = +e.target.value; $('stallVal').textContent = e.target.value; });
-$('speed').addEventListener('input', e => { cfg.speed = +e.target.value; $('speedVal').textContent = (+e.target.value).toFixed(1) + '×'; });
-$('eps').addEventListener('input', e => { cfg.eps = +e.target.value; $('epsVal').textContent = (+e.target.value).toFixed(1); });
-$('fold').addEventListener('input', e => { cfg.foldDeg = +e.target.value; $('foldVal').textContent = e.target.value + '°'; });
-$('hingeRatio').addEventListener('input', e => { cfg.hingeRatio = +e.target.value; $('hingeRatioVal').textContent = (+e.target.value).toFixed(2); layout(); });
-$('autoFinish').addEventListener('change', e => { cfg.autoFinish = e.target.checked; });
-// 拖拽角度滑块期间视为“手在抬/合屏幕”，不做停顿加速
-$('angle').addEventListener('pointerdown', () => { holding = true; });
-window.addEventListener('pointerup', () => { holding = false; });
-window.addEventListener('pointercancel', () => { holding = false; });
-$('blur').addEventListener('input', e => {
-  cfg.blurScale = +e.target.value; $('blurVal').textContent = (+e.target.value).toFixed(1) + '×';
-  document.documentElement.style.setProperty('--hinge-blur-fine', (6 * cfg.blurScale) + 'px');
-  document.documentElement.style.setProperty('--hinge-blur-mid', (18 * cfg.blurScale) + 'px');
-  document.documentElement.style.setProperty('--hinge-blur-wide', (40 * cfg.blurScale) + 'px');
-});
-
-// 演示：以 ease-out 抬到一半后停手 → 观察停顿加速补完与端点解锁
-$('auto').addEventListener('click', () => {
-  if (hid.connected) { setHid('warn', '演示模式已暂停（传感器接管中）'); return; }
-  const start = performance.now(), from = parseFloat($('angle').value), to = 62, dur = 1200;
-  (function step(now) {
-    const k = Math.min((now - start) / dur, 1);
-    const v = from + (to - from) * (1 - Math.pow(1 - k, 3));
-    $('angle').value = v; $('angleVal').textContent = v.toFixed(1) + '°';
-    if (k < 1) requestAnimationFrame(step);
-  })(start);
-});
-$('reset').addEventListener('click', () => {
-  $('angle').value = 0; $('angleVal').textContent = '0°';
-  Object.assign(st, { progress: 0, phase: 'idle', raw: null, lastAngle: null, lastT: 0, lastMoveT: 0,
-                      pending: 0, target: null, openLatched: false, closeLatched: false });
-});
-
-/* =========================================================================
- * 6) 一键安装：直接下载可双击运行的 .command 安装程序
- * ========================================================================= */
-const INSTALL_SCRIPT = `#!/usr/bin/env bash
-# MacKZ 一键安装（双击运行）：编译 → 安装到 /Applications → 开机自启 → 启动
-set -euo pipefail
-cd "$(dirname "$0")"
-if [ ! -d "./MacKZ" ] && [ ! -f "./build.sh" ]; then
-  echo "请先把本脚本放到 MacKZ 项目目录（与 build.sh 同级）再运行。"; exit 1
-fi
-if [ -f "./install.sh" ]; then
-  bash ./install.sh
-else
-  echo "缺少 install.sh，请使用项目完整目录。"; exit 1
-fi
-read -n 1 -s -r -p "按任意键关闭…"
-`;
-const INSTALL_CMD = 'cd /path/to/MacKZ && chmod +x install.sh && ./install.sh';
-const UNINSTALL_CMD = 'cd /path/to/MacKZ && ./install.sh --uninstall';
-
-$('download').addEventListener('click', () => {
-  const blob = new Blob([INSTALL_SCRIPT], { type: 'text/x-shellscript' });
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = 'MacKZ-安装.command';
-  a.click();
-  URL.revokeObjectURL(a.href);
-  $('installInfo').innerHTML = '已下载 <code>MacKZ-安装.command</code>：把它放进 MacKZ 目录后双击运行；' +
-    '若提示「无法验证开发者」，右键 →「打开」，或在终端执行 <code>chmod +x MacKZ-安装.command</code>。';
-});
-$('copyCmd').addEventListener('click', () => copy(INSTALL_CMD, '已复制安装命令：把 /path/to/MacKZ 换成你的实际目录'));
-$('copyUninstall').addEventListener('click', () => copy(UNINSTALL_CMD, '已复制卸载命令'));
-function copy(text, tip) {
-  navigator.clipboard?.writeText(text).then(
-    () => { $('installInfo').innerHTML = tip + '<br><code>' + text + '</code>'; },
-    () => { $('installInfo').innerHTML = '复制失败，请手动复制：<br><code>' + text + '</code>'; }
-  );
-}
+window.addEventListener("resize", () => { W = 0; render(); });
+requestAnimationFrame(tick);
 </script>
 </body>
 </html>

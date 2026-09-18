@@ -151,24 +151,29 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             sliderRow("片段基准时长", \.clipDuration, 0.15...2.0, decimals: 2, suffix: " s"),
             intSliderRow("补完最短时长", \.minCatchUpMs, 0...600, suffix: " ms"),
             sliderRow("有效移动阈值", \.angleEpsilon, 0.1...5, decimals: 2, suffix: "°"),
-            sliderRow("同向重触发阈值", \.rearmProgress, 0.3...1.0, decimals: 2, suffix: "")
+            sliderRow("端点防抖阈值", \.rearmProgress, 0.01...0.4, decimals: 2, suffix: "")
         ]))
 
         // ---------- 角度标定 ----------
-        stack.addArrangedSubview(sectionBox(title: "角度标定", rows: [
-            sliderRow("完全闭合角度", \.closedAngle, 0...180, decimals: 1, suffix: "°"),
-            sliderRow("完全打开角度", \.openAngle, 0...180, decimals: 1, suffix: "°"),
+        stack.addArrangedSubview(sectionBox(title: "角度标定（进度 = (开始折叠角 − 角度) ÷ 区间）", rows: [
+            sliderRow("开始折叠角", \.triggerAngleDeg, 0...180, decimals: 1, suffix: "°"),
+            sliderRow("完全合上角", \.closeAngleDeg, 0...180, decimals: 1, suffix: "°"),
             switchRow("反转传感器方向", \.invertAngle),
             switchRow("显示进度角标", \.showBadge)
         ]))
 
         // ---------- 视觉 ----------
         stack.addArrangedSubview(sectionBox(title: "Duo Continuity 视觉效果", rows: [
-            sliderRow("折痕位置（距顶边）", \.hingeLineRatio, 0.2...0.85, decimals: 2, suffix: ""),
-            sliderRow("折痕最大角度", \.foldAngleDeg, 30...110, decimals: 0, suffix: "°"),
-            sliderRow("渐进模糊强度", \.blurStrength, 0...1, decimals: 2, suffix: ""),
-            sliderRow("边缘色散强度", \.dispersion, 0...1, decimals: 2, suffix: ""),
-            sliderRow("视距（越小透视越强）", \.eyeDistance, 1.0...6.0, decimals: 2, suffix: ""),
+            popupRow("视觉风格", \.visualStyle, options: [
+                ("clear", "Clear · 轻模糊"),
+                ("frosted", "Frosted · 磨砂玻璃（默认）"),
+                ("cinematic", "Cinematic · 深模糊 + 棱镜色散")
+            ]),
+            popupRow("视点", \.viewpoint, options: [
+                ("desk", "俯看（笔记本放在桌面上）"),
+                ("front", "平视（支架抬升 / 外接屏）")
+            ]),
+            sliderRow("玻璃最大立起角", \.foldAngleDeg, 30...90, decimals: 0, suffix: "°"),
             sliderRow("覆盖层不透明度", \.overlayAlpha, 0.1...1.0, decimals: 2, suffix: ""),
             intSliderRow("覆盖窗口层级", \.overlayLevel, 10...2000, suffix: "")
         ]))
@@ -185,11 +190,11 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         ]))
 
         // ---------- 手动预览（没有铰链传感器的机型也能体验动画） ----------
-        let progressSlider = NSSlider(value: 1, minValue: 0, maxValue: 1, target: nil, action: nil)
+        let progressSlider = NSSlider(value: 0, minValue: 0, maxValue: 1, target: nil, action: nil)
         progressSlider.isContinuous = true
         progressSlider.translatesAutoresizingMaskIntoConstraints = false
         progressSlider.widthAnchor.constraint(equalToConstant: 250).isActive = true
-        let progressValue = NSTextField(labelWithString: "100%")
+        let progressValue = NSTextField(labelWithString: "0%")
         progressValue.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
         progressValue.textColor = .secondaryLabelColor
         progressValue.alignment = .right
@@ -207,7 +212,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         progressSlider.action = #selector(SliderHandler.fire(_:))
 
         let manualTip = NSTextField(wrappingLabelWithString:
-            "拖动滑块即可实时预览 Duo Continuity 折叠效果：0% = 完全合上，100% = 完全展开（正常画面）。")
+            "拖动滑块即可实时预览 Duo Continuity 折叠效果：0% = 完全展开（正常画面），100% = 完全折上。")
         manualTip.font = .systemFont(ofSize: 11)
         manualTip.textColor = .tertiaryLabelColor
         manualTip.preferredMaxLayoutWidth = 520
@@ -330,6 +335,27 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         return makeRow(title: title, views: [slider, valueLabel])
     }
 
+    /// 下拉选择行（对应 Config 里的 String 枚举字段，如视觉风格 / 视点）
+    private func popupRow(_ title: String, _ keyPath: WritableKeyPath<Config, String>,
+                          options: [(value: String, label: String)]) -> NSView {
+        let popup = NSPopUpButton(frame: .zero, pullsDown: false)
+        popup.translatesAutoresizingMaskIntoConstraints = false
+        popup.widthAnchor.constraint(equalToConstant: 250).isActive = true
+        for option in options { popup.addItem(withTitle: option.label) }
+        popup.selectItem(at: options.firstIndex { $0.value == config[keyPath: keyPath] } ?? 0)
+
+        let kp = keyPath
+        let handler = PopupHandler { [weak self] label in
+            guard let self, let match = options.first(where: { $0.label == label }) else { return }
+            self.config[keyPath: kp] = match.value
+        }
+        handlers.append(handler)
+        popup.target = handler
+        popup.action = #selector(PopupHandler.fire(_:))
+
+        return makeRow(title: title, views: [popup])
+    }
+
     /// 开关行
     private func switchRow(_ title: String, _ keyPath: WritableKeyPath<Config, Bool>) -> NSView {
         let box = NSButton(checkboxWithTitle: "", target: nil, action: nil)
@@ -433,9 +459,9 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
 
     /// 复位到完全展开：关闭覆盖层，回到正常桌面画面
     @objc private func resetManual() {
-        onManualProgress?(1.0)
-        manualSlider?.doubleValue = 1
-        manualValueLabel?.stringValue = "100%"
+        onManualProgress?(0.0)
+        manualSlider?.doubleValue = 0
+        manualValueLabel?.stringValue = "0%"
     }
 
     @objc private func openPrivacySettings() {
@@ -473,4 +499,11 @@ private final class BoolHandler: NSObject {
     private let action: (Bool) -> Void
     init(_ action: @escaping (Bool) -> Void) { self.action = action }
     @objc func fire(_ sender: NSButton) { action(sender.state == .on) }
+}
+
+/// 下拉框回调持有者
+private final class PopupHandler: NSObject {
+    private let action: (String) -> Void
+    init(_ action: @escaping (String) -> Void) { self.action = action }
+    @objc func fire(_ sender: NSPopUpButton) { action(sender.titleOfSelectedItem ?? "") }
 }

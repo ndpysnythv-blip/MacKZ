@@ -40,9 +40,10 @@ final class OverlayController {
     func render(_ state: HingeRenderState) {
         guard device != nil else { return }        // 渲染层不可用
         let p = min(max(state.progress, 0), 1)
-        let active = config.enabled && state.active && p > 0.005 && p < 0.995
+        // progress 0 = 完全展开（投影为恒等直通）→ 隐藏覆盖层并停采集，空闲零开销；
+        // progress 1 = 完全折上，此时仍需保留覆盖层，把「折起的桌面」画出来。
+        let active = config.enabled && state.active && p > 0.005
 
-        // 完全打开时几何投影即为恒等映射 → 直接隐藏并停采集，空闲零开销
         guard active else {
             hide()
             if config.captureIdleStop { stopCapture() }
@@ -51,12 +52,13 @@ final class OverlayController {
         startCaptureIfNeeded()
         show()
 
-        let fade = min(min(p, 1 - p) / 0.04, 1)      // 两端 4% 柔和交接
+        // 两端 3% 用窗口透明度做柔和交接，避免覆盖层出现/消失时闪一下
+        let fade = min(p / 0.03, 1)
         for window in windows {
             let view = window.foldView
-            view.fade = fade
-            view.fold = p
+            view.progress = p
             if let texture = latestTexture { view.sourceTexture = texture }
+            window.alphaValue = config.overlayAlpha * fade
         }
         lastFrameTime = CACurrentMediaTime()
     }
@@ -64,13 +66,7 @@ final class OverlayController {
     func apply(config: Config) {
         self.config = config
         for window in windows {
-            let view = window.foldView
-            view.creaseRatio = config.hingeLineRatio
-            view.maxFoldDeg = config.foldAngleDeg
-            view.blurStrength = config.blurStrength
-            view.dispersion = config.dispersion
-            view.eyeDistance = config.eyeDistance
-            view.renderScale = CGFloat(config.renderScale)
+            window.foldView.apply(config: config)
             window.level = NSWindow.Level(rawValue: config.overlayLevel)
             window.sharingType = config.excludedFromCapture ? .none : .readWrite
             window.alphaValue = visible ? config.overlayAlpha : 0
@@ -154,12 +150,7 @@ final class OverlayWindow: NSWindow {
 
     init(screen: NSScreen, device: MTLDevice, config: Config) {
         foldView = MetalFoldView(frame: CGRect(origin: .zero, size: screen.frame.size), device: device)
-        foldView.creaseRatio = config.hingeLineRatio
-        foldView.maxFoldDeg = config.foldAngleDeg
-        foldView.blurStrength = config.blurStrength
-        foldView.dispersion = config.dispersion
-        foldView.eyeDistance = config.eyeDistance
-        foldView.renderScale = CGFloat(config.renderScale)
+        foldView.apply(config: config)
 
         // 注意：必须调用 NSWindow 的「指定初始化器」init(contentRect:styleMask:backing:defer:)。
         // 带 screen: 参数的那个是便利构造器，它内部会回调 self 的指定初始化器，

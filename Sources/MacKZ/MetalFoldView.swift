@@ -3,40 +3,64 @@ import Metal
 import QuartzCore
 import simd
 
-/// 真实渲染层：CAMetalLayer + 自定义着色器。
-/// 每帧两趟：横向模糊 → 折叠重投影（含纵向模糊与色散），全部在 GPU 完成。
-/// 屏幕内容由 ScreenCaptureStream 以零拷贝方式喂进来（IOSurface → MTLTexture）。
+/// 真实渲染层：CAMetalLayer + 1:1 移植 DuoHinge 的四趟 Metal 管线。
+///
+/// 每帧四趟（全部 GPU，主线程只写 3 个 float4 uniform）：
+///   1) hingeProject   射线投射：桌面固定在 z=0，虚拟玻璃绕底边铰链立起，透过玻璃重投影桌面
+///   2) hingeBlurX     横向可分离高斯（散射半径随「离铰链高度 × sin 玻璃角」增大）
+///   3) hingeBlurY     纵向高斯
+///   4) hingeDispersion 径向色散（Cinematic 风格，色散=0 时跳过）
+/// 屏幕内容由 ScreenCaptureStream 零拷贝喂进来（IOSurface → MTLTexture）。
 final class MetalFoldView: NSView {
 
-    /// 与着色器 Uniforms 严格对应（成员顺序/类型必须一致）
-    private struct Uniforms {
-        var texelSize: SIMD2<Float> = .zero
-        var creaseRatio: Float = 0.62
-        var foldAngle: Float = 0
-        var eyeDistance: Float = 2.2
-        var blurStrength: Float = 0.55
-        var dispersion: Float = 0.35
-        var fade: Float = 0
-        var aspect: Float = 1.6
-        var halfWidth: Float = 0.8
-        var brightness: Float = 0.35
+    /// 视点（与 DuoHinge 一致：x 相对屏宽，y/z 相对屏高；屏幕 y 向下）
+    enum Viewpoint {
+        /// 俯视：坐在桌前俯看笔记本的常见姿态（默认）
+        case desk
+        /// 正视：支架/外接抬升后的平视姿态
+        case front
+
+        var eye: SIMD3<Float> {
+            switch self {
+            case .front: return SIMD3(0.5, 0.5, 2.8)
+            case .desk:  return SIMD3(0.5, 0.35, 2.8)
+            }
+        }
     }
 
-    /// 折叠进度：0 = 完全合上（折痕角最大），1 = 完全打开（无折叠，画面与真实桌面完全一致）
-    var fold: Double = 1 {
-        didSet { if abs(fold - oldValue) > 0.0005 { setNeedsFrame() } }
+    /// 与着色器 HingeUniforms 严格对应（三个 float4，共 48 字节）
+    private struct Uniforms {
+        var geometry = SIMD4<Float>.zero   // 宽、高、progress、blur
+        var optics = SIMD4<Float>.zero     // 压暗、色散、未用、未用
+        var eye = SIMD4<Float>.zero        // 视点 x、y、z、未用
     }
-    /// 折痕位置（0=屏幕顶，1=屏幕底）
-    var creaseRatio: Double = 0.62 { didSet { setNeedsFrame() } }
-    /// 完全合上时的最大折痕角（度）
-    var maxFoldDeg: Double = 96 { didSet { setNeedsFrame() } }
-    var blurStrength: Double = 0.55 { didSet { setNeedsFrame() } }
-    var dispersion: Double = 0.35 { didSet { setNeedsFrame() } }
-    var eyeDistance: Double = 2.2 { didSet { setNeedsFrame() } }
+
+    /// 折叠进度：0 = 展开（正常画面，投影为恒等直通），1 = 完全合上（玻璃立起 90°）
+    var progress: Double = 0 {
+        didSet { if abs(progress - oldValue) > 0.0005 { setNeedsFrame() } }
+    }
+    /// 玻璃模糊强度（DuoHinge 预设：Clear 0.25 / Frosted 1 / Cinematic 1.3）
+    var glassBlur: Double = 1 { didSet { setNeedsFrame() } }
+    /// 幕布压暗强度（Clear 0.2 / Frosted 1 / Cinematic 1.2）
+    var glassDarkness: Double = 1 { didSet { setNeedsFrame() } }
+    /// 径向色散强度（仅 Cinematic 为 1，其余 0）
+    var glassDispersion: Double = 0 { didSet { setNeedsFrame() } }
+    /// 玻璃完全立起时的角度（度）。90 = 与参考实现一致（末端几何退化会整屏归黑）；调小可保留画面
+    var foldAngleDeg: Double = 90 { didSet { setNeedsFrame() } }
+    /// 视点
+    var viewpoint: Viewpoint = .desk { didSet { setNeedsFrame() } }
     /// 渲染分辨率比例（0.5~1），越低越省电，模糊本身会掩盖分辨率损失
     var renderScale: CGFloat = 0.75 { didSet { setNeedsFrame() } }
-    /// 整体不透明度（序列两端淡入淡出）
-    var fade: Double = 0 { didSet { if abs(fade - oldValue) > 0.002 { setNeedsFrame() } } }
+
+    /// 按配置同步视觉预设、视点与渲染分辨率
+    func apply(config: Config) {
+        glassBlur = config.styleBlur
+        glassDarkness = config.styleDarkness
+        glassDispersion = config.styleDispersion
+        foldAngleDeg = config.foldAngleDeg
+        viewpoint = config.viewpoint == "front" ? .front : .desk
+        renderScale = CGFloat(config.renderScale)
+    }
 
     /// 屏幕抓帧纹理（由采集线程传入，主线程赋值）
     var sourceTexture: MTLTexture? { didSet { setNeedsFrame() } }
@@ -47,14 +71,13 @@ final class MetalFoldView: NSView {
     // MARK: Metal 对象
     private let device: MTLDevice
     private let queue: MTLCommandQueue?
-    private var foldPipeline: MTLRenderPipelineState?
-    private var blurPipeline: MTLRenderPipelineState?
-    private var blurTexture: MTLTexture?
+    private var pipelines: [MTLRenderPipelineState] = []   // project / blurX / blurY / dispersion
+    /// 三个离屏中间纹理（投影 → 模糊X → 模糊Y 依次接力）
+    private var targets: [MTLTexture] = []
     /// 无画面源时的兜底纹理（暗场渐变）：确保没有「屏幕录制」权限时也能看到折叠几何
     private var fallbackTexture: MTLTexture?
     private var displayLink: CADisplayLink?
     private var needsFrame = true
-    private var lastFailure: String?
 
     private var metalLayer: CAMetalLayer? { layer as? CAMetalLayer }
 
@@ -102,7 +125,7 @@ final class MetalFoldView: NSView {
         let size = CGSize(width: max(bounds.width * renderScale * scale, 2),
                           height: max(bounds.height * renderScale * scale, 2))
         metalLayer.drawableSize = size
-        blurTexture = nil      // 尺寸变了，中间纹理按需重建
+        targets.removeAll()    // 尺寸变了，中间纹理按需重建
     }
 
     // MARK: - 管线（运行时编译着色器）
@@ -110,29 +133,16 @@ final class MetalFoldView: NSView {
     private func buildPipelines() {
         do {
             let library = try device.makeLibrary(source: FoldShader.source, options: nil)
-            let descriptor = MTLRenderPipelineDescriptor()
-            descriptor.vertexFunction = library.makeFunction(name: "vsFull")
-            descriptor.fragmentFunction = library.makeFunction(name: "fsFold")
-            descriptor.colorAttachments[0].pixelFormat = .bgra8Unorm
-            // 预乘 alpha 混合，窗口本身透明
-            descriptor.colorAttachments[0].isBlendingEnabled = true
-            descriptor.colorAttachments[0].rgbBlendOperation = .add
-            descriptor.colorAttachments[0].alphaBlendOperation = .add
-            descriptor.colorAttachments[0].sourceRGBBlendFactor = .one
-            descriptor.colorAttachments[0].sourceAlphaBlendFactor = .one
-            descriptor.colorAttachments[0].destinationRGBBlendFactor = .oneMinusSourceAlpha
-            descriptor.colorAttachments[0].destinationAlphaBlendFactor = .oneMinusSourceAlpha
-            foldPipeline = try device.makeRenderPipelineState(descriptor: descriptor)
-
-            let blurDescriptor = MTLRenderPipelineDescriptor()
-            blurDescriptor.vertexFunction = library.makeFunction(name: "vsFull")
-            blurDescriptor.fragmentFunction = library.makeFunction(name: "fsBlurH")
-            blurDescriptor.colorAttachments[0].pixelFormat = .bgra8Unorm
-            blurPipeline = try device.makeRenderPipelineState(descriptor: blurDescriptor)
-            lastFailure = nil
+            pipelines = []
+            for name in ["hingeProject", "hingeBlurX", "hingeBlurY", "hingeDispersion"] {
+                let descriptor = MTLRenderPipelineDescriptor()
+                descriptor.vertexFunction = library.makeFunction(name: "hingeVertex")
+                descriptor.fragmentFunction = library.makeFunction(name: name)
+                descriptor.colorAttachments[0].pixelFormat = .bgra8Unorm
+                pipelines.append(try device.makeRenderPipelineState(descriptor: descriptor))
+            }
         } catch {
             let message = "着色器编译失败：\(error.localizedDescription)"
-            lastFailure = message
             DispatchQueue.main.async { [weak self] in self?.onError?(message) }
             NSLog("[MacKZ] %@", message)
         }
@@ -179,7 +189,7 @@ final class MetalFoldView: NSView {
                                                                  width: 2, height: 2, mipmapped: false)
         descriptor.usage = [.shaderRead]
         guard let texture = device.makeTexture(descriptor: descriptor) else { return nil }
-        // BGRA 低位深蓝紫，与 Duo Continuity 的暗场基调一致
+        // BGRA 低位深蓝紫，与折叠暗场基调一致
         let pixels: [UInt32] = [0xFF2A1408, 0xFF3E2412,
                                 0xFF2A1408, 0xFF3E2412]
         texture.replace(region: MTLRegionMake2D(0, 0, 2, 2), mipmapLevel: 0,
@@ -188,12 +198,22 @@ final class MetalFoldView: NSView {
     }
 
     private func draw() {
+        guard let metalLayer, pipelines.count == 4,
+              let drawable = metalLayer.nextDrawable() else { return }
+
+        let p = min(max(progress, 0), 1)
+
+        // 完全展开：投影即恒等直通 → 清成全透明，把真实桌面还给它
+        guard p > 0.0001 else {
+            clearDrawable(drawable.texture)
+            return
+        }
+
         // 没有屏幕画面（未授权 / 采集尚未出帧）时退回兜底暗场，
         // 这样即使拿不到权限，折叠动画的形状依然可见，便于判断程序是否在工作。
         if sourceTexture == nil, fallbackTexture == nil { fallbackTexture = makeFallbackTexture() }
-        guard let metalLayer, let foldPipeline, let blurPipeline,
-              let source = sourceTexture ?? fallbackTexture,
-              let drawable = metalLayer.nextDrawable() else { return }
+        guard let source = sourceTexture ?? fallbackTexture else { return }
+
         // 尺寸可能因窗口刚挂载而尚未就绪，这里兜底重算一次
         var w = Int(metalLayer.drawableSize.width)
         var h = Int(metalLayer.drawableSize.height)
@@ -204,62 +224,58 @@ final class MetalFoldView: NSView {
         }
         guard w > 1, h > 1 else { return }
 
-        var u = Uniforms()
-        u.texelSize = SIMD2<Float>(1 / Float(source.width), 1 / Float(source.height))
-        u.creaseRatio = Float(creaseRatio)
-        // 折痕角：完整打开 = 0°；完全合上 = maxFoldDeg，钳制在 80° 内避免几何退化
-        // 拆成多步计算，避免单行复合表达式让类型检查超时（Swift 编译器已知问题）
-        let foldProgress = min(max(fold, 0), 1)
-        let foldDegrees = min((1 - foldProgress) * maxFoldDeg, 80)
-        u.foldAngle = Float(foldDegrees * Double.pi / 180)
-        u.eyeDistance = Float(eyeDistance)
-        u.blurStrength = Float(blurStrength)
-        u.dispersion = Float(dispersion)
-        u.fade = Float(max(min(fade, 1), 0))
-        u.aspect = Float(bounds.width / max(bounds.height, 1))
-        u.halfWidth = u.aspect * 0.5
-        u.brightness = 0.38
-
-        guard let cmd = queue?.makeCommandBuffer() else { return }
-
-        // ---- 第一趟：横向模糊（离屏纹理）----
-        if blurTexture == nil || blurTexture!.width != w || blurTexture!.height != h {
+        // 中间纹理按需重建（三个，尺寸与 drawable 一致）
+        if targets.count != 3 || targets[0].width != w || targets[0].height != h {
             let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm,
-                                                            width: w, height: h, mipmapped: false)
+                                                             width: w, height: h, mipmapped: false)
             d.usage = [.renderTarget, .shaderRead]
             d.storageMode = .private
-            blurTexture = device.makeTexture(descriptor: d)
+            targets = (0..<3).compactMap { _ in device.makeTexture(descriptor: d) }
         }
-        if let blurTex = blurTexture {
-            let pass = MTLRenderPassDescriptor()
-            pass.colorAttachments[0].texture = blurTex
-            pass.colorAttachments[0].loadAction = .clear
-            pass.colorAttachments[0].storeAction = .store
-            pass.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 0)
-            if let enc = cmd.makeRenderCommandEncoder(descriptor: pass) {
-                enc.setRenderPipelineState(blurPipeline)
-                enc.setFragmentTexture(source, index: 0)
-                enc.setFragmentBytes(&u, length: MemoryLayout<Uniforms>.stride, index: 0)
-                enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
-                enc.endEncoding()
-            }
-        }
+        guard targets.count == 3 else { return }
+        guard let cmd = queue?.makeCommandBuffer() else { return }
 
-        // ---- 第二趟：折叠重投影 + 纵向模糊 + 色散（到窗口 drawable）----
-        let pass = MTLRenderPassDescriptor()
-        pass.colorAttachments[0].texture = drawable.texture
-        pass.colorAttachments[0].loadAction = .clear
-        pass.colorAttachments[0].storeAction = .store
-        pass.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 0)
-        if let enc = cmd.makeRenderCommandEncoder(descriptor: pass) {
-            enc.setRenderPipelineState(foldPipeline)
-            enc.setFragmentTexture(blurTexture ?? source, index: 0)
+        var u = Uniforms()
+        u.geometry = SIMD4<Float>(Float(w), Float(h), Float(p), Float(glassBlur))
+        u.optics = SIMD4<Float>(Float(glassDarkness), Float(glassDispersion),
+                                Float(min(max(foldAngleDeg, 5), 90) / 90.0), 0)
+        let eye = viewpoint.eye
+        u.eye = SIMD4<Float>(eye.x, eye.y, eye.z, 0)
+
+        // 四趟接力：投影 → 模糊X → 模糊Y → 色散（色散关掉时最后一趟直接画到 drawable）
+        let names = 0..<pipelines.count
+        var src = source
+        for index in names {
+            let isLast = index == pipelines.count - 1
+            // 色散强度为 0 时跳过色散趟，改由模糊Y直接落屏
+            if index == 3 && glassDispersion <= 0 { continue }
+            let destination = (index == 3 || (glassDispersion <= 0 && index == 2)) ? drawable.texture : targets[index]
+            let pass = MTLRenderPassDescriptor()
+            pass.colorAttachments[0].texture = destination
+            pass.colorAttachments[0].loadAction = .dontCare
+            pass.colorAttachments[0].storeAction = .store
+            guard let enc = cmd.makeRenderCommandEncoder(descriptor: pass) else { return }
+            enc.setRenderPipelineState(pipelines[index])
+            enc.setFragmentTexture(src, index: 0)
             enc.setFragmentBytes(&u, length: MemoryLayout<Uniforms>.stride, index: 0)
             enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
             enc.endEncoding()
+            src = destination
         }
         cmd.present(drawable)
         cmd.commit()
         ensureRunning()
+    }
+
+    /// 把 drawable 清成全透明（覆盖层隐藏 / progress=0 时使用）
+    private func clearDrawable(_ texture: MTLTexture) {
+        guard let cmd = queue?.makeCommandBuffer() else { return }
+        let pass = MTLRenderPassDescriptor()
+        pass.colorAttachments[0].texture = texture
+        pass.colorAttachments[0].loadAction = .clear
+        pass.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 0)
+        pass.colorAttachments[0].storeAction = .store
+        if let enc = cmd.makeRenderCommandEncoder(descriptor: pass) { enc.endEncoding() }
+        cmd.commit()
     }
 }

@@ -1,25 +1,16 @@
 import Foundation
 import IOKit
+import IOKit.hid
 import Darwin
 
-// MARK: - 私有 IOHID 接口声明
+// MARK: - 私有 IOHID 接口声明（仅供「传感器探针」枚举系统全部 HID 服务使用）
 // macOS 没有公开的“屏幕开合角度”API。这些符号由 IOKit 框架导出但未公开在头文件中，
 // 使用 @_silgen_name 直接链接即可（不需要内核扩展、不需要辅助功能权限、不注入任何进程）。
 @_silgen_name("IOHIDEventSystemClientCreate")
 private func IOHIDEventSystemClientCreate(_ allocator: CFAllocator?) -> CFTypeRef?
 
-@_silgen_name("IOHIDEventSystemClientSetMatchingMultiple")
-private func IOHIDEventSystemClientSetMatchingMultiple(_ client: CFTypeRef, _ matching: CFArray) -> Void
-
 @_silgen_name("IOHIDEventSystemClientCopyServices")
 private func IOHIDEventSystemClientCopyServices(_ client: CFTypeRef) -> CFArray?
-
-@_silgen_name("IOHIDEventSystemClientScheduleWithRunLoop")
-private func IOHIDEventSystemClientScheduleWithRunLoop(_ client: CFTypeRef, _ runLoop: CFRunLoop, _ mode: CFString) -> Void
-
-// 说明：私有 API IOHIDEventSystemClientUnscheduleFromRunLoop 在部分 macOS 版本
-// （含 macOS 14/15 的部分 SDK）中没有导出符号，链接会报 Undefined symbols。
-// 本插件在 RunLoop 退出后即结束传感器线程、释放 client，因此无需手动 unschedule。
 
 @_silgen_name("IOHIDServiceClientCopyProperty")
 private func IOHIDServiceClientCopyProperty(_ service: CFTypeRef, _ key: CFString) -> CFTypeRef?
@@ -30,17 +21,25 @@ private func IOHIDServiceClientCopyEvent(_ service: CFTypeRef, _ type: Int64, _ 
 @_silgen_name("IOHIDEventGetFloatValue")
 private func IOHIDEventGetFloatValue(_ event: CFTypeRef, _ field: Int32) -> Double
 
-// HID 属性键（IOHIDKeys.h 里是 CFSTR 宏，Swift 不会导入，这里用字面量）
-private let kKeyUsagePage = "PrimaryUsagePage" as CFString
-private let kKeyUsage = "PrimaryUsage" as CFString
-private let kKeyProduct = "Product" as CFString
-private let kKeyTransport = "Transport" as CFString
+// MARK: - 传感器匹配常量（与可正常工作的 LidAngleSensor 实现保持一致）
+/// Apple 的 USB/HID 厂商号
+private let kAppleVendorID = 0x05AC
+/// MacBook 内置 Lid Angle Sensor 的产品号
+private let kLidAngleProductID = 0x8104
+/// 用途页：Sensors
+private let kUsagePageSensors = 0x0020
+/// 设备级用途：Lid Angle Sensor
+private let kUsageLidAngle = 0x008A
+/// 元素级用途：角度数据字段（真正的读数在这里）
+private let kUsageAngleField = 0x047F
+/// 请求的传感器上报间隔（微秒）：8 ms
+private let kFastReportIntervalUS = 8000
 
 /// 读取 MacBook 铰链（屏幕开合）角度。
 ///
-/// - 硬件前提：仅带 Lid Angle Sensor 的机型可用（Apple Silicon MacBook 具备）；
-///   Intel 机型一般没有该传感器，此时会通过 onStatus 上报“未检测到”，不会崩溃。
-/// - 线程模型：传感器在独立线程按 sampleHz 轮询，onAngle 在传感器线程回调，
+/// - 硬件前提：仅带 Lid Angle Sensor 的机型可用（Apple Silicon MacBook 基本都具备）；
+///   没有该硬件的机型会通过 onStatus 上报“未检测到”，不会崩溃。
+/// - 线程模型：传感器跑在独立线程的 RunLoop 上，onAngle 在传感器线程回调，
 ///   调用方（AppDelegate）负责切回主线程。空闲时只做一次 HID 取值，CPU 开销可忽略。
 final class LidAngleSensor {
 
@@ -55,13 +54,15 @@ final class LidAngleSensor {
     private var thread: Thread?
     private var timer: Timer?
     private var runLoop: CFRunLoop?
-    private var client: CFTypeRef?
-    private var service: CFTypeRef?
-    private var smoothed: Double?
 
-    private var config = Config()
+    // 传感器线程内部持有的 HID 资源（仅在传感器线程访问）
+    private var manager: IOHIDManager?
+    private var opened = false
+    private var angleDriver: io_service_t = 0            // AppleSPUHIDDriver 中 Product == "las" 的服务
+    private var originalInterval: CFTypeRef?            // 原 ReportInterval，退出时还原
+    private var hasReading = false
 
-    /// 探针报告路径（便于用户按机型适配传感器参数）
+    /// 探针报告路径（便于按机型适配传感器参数）
     static let reportURL = ConfigStore.directory.appendingPathComponent("probe.txt")
 
     // MARK: - 生命周期
@@ -72,8 +73,6 @@ final class LidAngleSensor {
         guard !running else { return }
         running = true
         generation += 1
-        self.config = config
-        smoothed = nil
         let gen = generation
 
         let t = Thread { [weak self] in self?.sensorThreadMain(gen) }
@@ -92,7 +91,7 @@ final class LidAngleSensor {
         self.thread = nil
         lock.unlock()
 
-        // 结束线程的 RunLoop：线程退出后 HID client 与定时器随即释放
+        // 结束传感器线程的 RunLoop；线程退出前会自行还原 ReportInterval 并关闭 HID 资源
         if let rl { CFRunLoopStop(rl) }
     }
 
@@ -104,140 +103,167 @@ final class LidAngleSensor {
     // MARK: - 传感器线程
 
     private func sensorThreadMain(_ gen: Int) {
-        guard let client = IOHIDEventSystemClientCreate(kCFAllocatorDefault) else {
-            onStatus?("传感器初始化失败")
-            return
-        }
-        self.client = client
+        let options = IOOptionBits(kIOHIDOptionsTypeNone)
+        let manager = IOHIDManagerCreate(kCFAllocatorDefault, options)
 
-        // 仅匹配“传感器”用途页，再用产品名/取值筛选出铰链角度传感器
-        var matching: [String: Any] = [kKeyUsagePage as String: config.usagePage]
-        if config.usage > 0 { matching[kKeyUsage as String] = config.usage }
-        IOHIDEventSystemClientSetMatchingMultiple(client, [matching] as CFArray)
-        IOHIDEventSystemClientScheduleWithRunLoop(client, CFRunLoopGetCurrent(), CFRunLoopMode.defaultMode.rawValue)
+        // 设备级匹配：只认 Apple 的 Lid Angle Sensor，避免误选加速度计 / 环境光传感器
+        let deviceMatch: [String: Any] = [
+            kIOHIDVendorIDKey as String: kAppleVendorID,
+            kIOHIDProductIDKey as String: kLidAngleProductID,
+            "PrimaryUsagePage": kUsagePageSensors,
+            "PrimaryUsage": kUsageLidAngle,
+        ]
+        IOHIDManagerSetDeviceMatching(manager, deviceMatch as CFDictionary)
 
+        // 上报回调：不设输入值匹配（部分系统在元素枚举完成前应用匹配会吞掉首帧事件），
+        // 统一在回调里按 usagePage / usage 过滤。
+        IOHIDManagerRegisterInputValueCallback(manager, { context, result, _, value in
+            guard result == kIOReturnSuccess, let context else { return }
+            let element = IOHIDValueGetElement(value)
+            guard IOHIDElementGetUsagePage(element) == UInt32(kUsagePageSensors),
+                  IOHIDElementGetUsage(element) == UInt32(kUsageAngleField) else { return }
+            let sensor = Unmanaged<LidAngleSensor>.fromOpaque(context).takeUnretainedValue()
+            sensor.receive(angle: Double(IOHIDValueGetIntegerValue(value)))
+        }, Unmanaged.passUnretained(self).toOpaque())
+
+        // 调度到本线程的 RunLoop（.commonModes 保证拖动窗口等交互期间也不丢事件）
         let rl = CFRunLoopGetCurrent()
         lock.lock(); runLoop = rl; lock.unlock()
+        IOHIDManagerScheduleWithRunLoop(manager, rl, CFRunLoopMode.commonModes.rawValue)
 
-        // client 刚创建时服务列表可能还没填充完，重试几次；
-        // 这里用 CFRunLoopRunInMode 让 RunLoop 跑一小会，给 HID client 时间枚举服务
-        var found: CFTypeRef?
-        for _ in 0..<6 {
-            found = selectService()
-            if found != nil { break }
-            _ = CFRunLoopRunInMode(CFRunLoopMode.defaultMode, 0.15, false)
+        guard IOHIDManagerOpen(manager, options) == kIOReturnSuccess else {
+            onStatus?("传感器打开失败（可能有其它程序占用了铰链传感器）")
+            IOHIDManagerUnscheduleFromRunLoop(manager, rl, CFRunLoopMode.commonModes.rawValue)
+            lock.lock(); running = false; lock.unlock()
+            return
         }
-        service = found
+        self.manager = manager
+        opened = true
 
-        if let s = service {
-            let name = stringProperty(s, kKeyProduct) ?? "?"
-            NSLog("[MacKZ] 已匹配铰链角度传感器：%@", name)
-            onStatus?("运行中（\(name)）")
+        // 请求更快的上报间隔：硬件不一定真按该速率上报，但实测能显著提升刷新率
+        requestFastReporting()
+
+        // 可用性判定：能枚举到匹配设备即认为硬件存在
+        if let devices = IOHIDManagerCopyDevices(manager) as? Set<IOHIDDevice>, !devices.isEmpty {
+            if let initial = Self.readCurrentAngle(from: devices) {
+                receive(angle: initial)
+                onStatus?("运行中（Lid Angle Sensor）")
+            } else {
+                onStatus?("已找到铰链传感器，等待首次读数")
+            }
         } else {
             onStatus?("未检测到铰链角度传感器")
-            NSLog("[MacKZ] 未匹配到铰链角度传感器，usagePage=0x%04X usage=0x%04X，请运行「传感器探针」确认机型是否有该硬件",
-                  config.usagePage, config.usage)
+            NSLog("[MacKZ] 未匹配到 Lid Angle Sensor（vendor=0x%04X product=0x%04X）", kAppleVendorID, kLidAngleProductID)
         }
 
+        // 兜底轮询：部分系统上回调很稀疏，用低频轮询补齐采样点
         let interval = 1.0 / max(config.sampleHz, 1)
         let t = Timer(timeInterval: interval, repeats: true) { [weak self] _ in
             self?.poll(gen)
         }
-        RunLoop.current.add(t, forMode: .default)
+        RunLoop.current.add(t, forMode: .common)
         self.timer = t
+
         CFRunLoopRun()   // 阻塞在传感器线程，直到 stop() 调用 CFRunLoopStop
 
-        // 线程收尾：RunLoop 已退出、线程即将结束，client 随引用释放即可
-        service = nil
-        self.client = nil
+        // ---------- 线程收尾 ----------
         t.invalidate()
+        self.timer = nil
+        restoreReportInterval()
+        if opened {
+            IOHIDManagerUnscheduleFromRunLoop(manager, rl, CFRunLoopMode.commonModes.rawValue)
+            IOHIDManagerClose(manager, options)
+            opened = false
+        }
+        self.manager = nil
+        lock.lock(); runLoop = nil; lock.unlock()
     }
 
-    /// 从匹配到的服务里挑出铰链角度传感器。
-    /// 注意：**不要**用“取值落在 0~180 就当角度”这种宽松兜底——很多传感器（加速度计、环境光）
-    /// 在默认字段上恰好读到 0，会被误判成角度传感器，结果角度永远显示 0。
-    private func selectService() -> CFTypeRef? {
-        guard let client else { return nil }
-        let services = (IOHIDEventSystemClientCopyServices(client) as? [CFTypeRef]) ?? []
-        guard !services.isEmpty else { return nil }
-        let wanted = config.productNameContains.lowercased()
+    /// 低频兜底采样：直接从设备读一次当前角度
+    private func poll(_ gen: Int) {
+        guard isRunning, gen == generation, let manager else { return }
+        guard let devices = IOHIDManagerCopyDevices(manager) as? Set<IOHIDDevice>, !devices.isEmpty else { return }
+        if let angle = Self.readCurrentAngle(from: devices) { receive(angle: angle) }
+    }
 
-        // 1) 配置里的产品名关键词（默认 "lid"）
-        if !wanted.isEmpty {
-            for s in services {
-                let product = (stringProperty(s, kKeyProduct) ?? "").lowercased()
-                if product.contains(wanted) { return s }
+    /// 收到一次有效读数（传感器线程）
+    private func receive(angle: Double) {
+        guard angle.isFinite, (0...360).contains(angle) else { return }
+        if !hasReading {
+            hasReading = true
+            onStatus?("运行中（Lid Angle Sensor）")
+        }
+        onAngle?(angle)
+    }
+
+    // MARK: - 读数
+
+    /// 从匹配设备里直接读取角度元素的当前值
+    private static func readCurrentAngle(from devices: Set<IOHIDDevice>) -> Double? {
+        let elementMatch: [String: Any] = [
+            kIOHIDElementUsagePageKey as String: kUsagePageSensors,
+            kIOHIDElementUsageKey as String: kUsageAngleField,
+        ]
+        for device in devices {
+            guard let elements = IOHIDDeviceCopyMatchingElements(
+                device, elementMatch as CFDictionary, IOOptionBits(kIOHIDOptionsTypeNone)) as? [IOHIDElement] else { continue }
+            for element in elements {
+                var valueRef: Unmanaged<IOHIDValue>?
+                let result = IOHIDDeviceGetValue(device, element, &valueRef)
+                if result == kIOReturnSuccess, let value = valueRef?.takeUnretainedValue() {
+                    let angle = Double(IOHIDValueGetIntegerValue(value))
+                    if angle.isFinite, (0...360).contains(angle) { return angle }
+                }
             }
         }
-        // 2) 名称里含 lid / angle 的任意服务（不同机型命名可能不同）
-        for s in services {
-            let product = (stringProperty(s, kKeyProduct) ?? "").lowercased()
-            if product.contains("lid") || product.contains("angle") { return s }
-        }
-        // 3) 严格兜底：取值落在 (0, 180] 才认（排除 0，避免误选）
-        for s in services {
-            if let v = readValue(s), v > 0, v <= 180 { return s }
-        }
         return nil
     }
 
-    /// 单次采样
-    private func poll(_ gen: Int) {
-        guard isRunning, gen == generation else { return }
-        guard let client else { return }
+    // MARK: - 上报提速
 
-        // 服务失效（休眠唤醒/显示器热插拔）时重新匹配
-        if service == nil {
-            IOHIDEventSystemClientSetMatchingMultiple(client, [[kKeyUsagePage as String: config.usagePage]] as CFArray)
-            service = selectService()
-            if let s = service { NSLog("[MacKZ] 传感器已重新匹配：%@", stringProperty(s, kKeyProduct) ?? "?") }
-            return
+    /// 把 AppleSPUHIDDriver 中 Product == "las" 的服务上报间隔临时压到 8ms，退出时还原。
+    /// 请求的速率不代表硬件一定按该速率上报，但能去掉系统默认的粗粒度节流。
+    private func requestFastReporting() {
+        var iterator: io_iterator_t = 0
+        guard IOServiceGetMatchingServices(kIOMainPortDefault, IOServiceMatching("AppleSPUHIDDriver"), &iterator) == kIOReturnSuccess else { return }
+        defer { IOObjectRelease(iterator) }
+
+        while case let service = IOIteratorNext(iterator), service != 0 {
+            let product = IORegistryEntryCreateCFProperty(service, "Product" as CFString, kCFAllocatorDefault, 0)?
+                .takeRetainedValue() as? String
+            guard product == "las", angleDriver == 0,
+                  let previous = IORegistryEntryCreateCFProperty(service, "ReportInterval" as CFString, kCFAllocatorDefault, 0)?
+                    .takeRetainedValue() else {
+                IOObjectRelease(service)
+                continue
+            }
+            let result = IORegistryEntrySetCFProperty(service, "ReportInterval" as CFString,
+                                                      NSNumber(value: kFastReportIntervalUS))
+            if result == kIOReturnSuccess {
+                angleDriver = service
+                originalInterval = previous
+            } else {
+                NSLog("[MacKZ] 请求传感器上报提速失败：%d", result)
+                IOObjectRelease(service)
+            }
         }
-
-        guard let raw = readValue(service!) else { return }
-        let value = config.invertAngle ? -raw : raw
-
-        // 轻量指数平滑，抑制抖动（0 表示不平滑）
-        let out: Double
-        if config.smoothing > 0, let prev = smoothed {
-            out = prev + (value - prev) * config.smoothing
-        } else {
-            out = value
-        }
-        smoothed = out
-        onAngle?(out)
     }
 
-    /// 读取一次角度原始值
-    private func readValue(_ service: CFTypeRef) -> Double? {
-        let type = Int64(config.eventType)
-        guard let event = IOHIDServiceClientCopyEvent(service, type, 0, 0) else { return nil }
-        let field = Int32((config.eventType << 16) | config.eventField)
-        let v = IOHIDEventGetFloatValue(event, field)
-        guard v.isFinite else { return nil }
-        return v
-    }
-
-    // MARK: - HID 属性辅助
-
-    private func stringProperty(_ service: CFTypeRef, _ key: CFString) -> String? {
-        guard let value = IOHIDServiceClientCopyProperty(service, key) else { return nil }
-        return value as? String
-    }
-
-    private func intProperty(_ service: CFTypeRef, _ key: CFString) -> Int? {
-        guard let value = IOHIDServiceClientCopyProperty(service, key) else { return nil }
-        if let n = value as? NSNumber { return n.intValue }
-        // 部分属性以 CFData 形式返回（4 字节小端）
-        if let d = value as? Data, d.count >= MemoryLayout<Int32>.size {
-            return Int(d.withUnsafeBytes { $0.load(as: Int32.self) })
+    /// 还原原上报间隔并释放服务（必须在传感器线程调用）
+    private func restoreReportInterval() {
+        guard angleDriver != 0 else { return }
+        if let originalInterval {
+            let result = IORegistryEntrySetCFProperty(angleDriver, "ReportInterval" as CFString, originalInterval)
+            if result != kIOReturnSuccess { NSLog("[MacKZ] 还原传感器上报间隔失败：%d", result) }
         }
-        return nil
+        IOObjectRelease(angleDriver)
+        angleDriver = 0
+        originalInterval = nil
     }
 
     // MARK: - 传感器探针
 
-    /// 列出所有传感器 HID 服务与其候选取值，输出到 probe.txt，方便按机型适配。
+    /// 列出所有传感器 HID 服务与其候选取值，输出到 probe.txt，方便确认机型是否具备该硬件。
     /// 用法：菜单栏「传感器探针」，然后查看报告文件。
     @discardableResult
     static func probe() -> String {
@@ -245,6 +271,30 @@ final class LidAngleSensor {
         lines.append("== MacKZ 传感器探针 ==")
         lines.append("机型: \(machineModel())   架构: \(archName())")
         lines.append("系统: \(ProcessInfo.processInfo.operatingSystemVersionString)")
+        lines.append("期望匹配: vendor=0x05AC product=0x8104 usagePage=0x0020 usage=0x008A 元素usage=0x047F")
+        lines.append("")
+
+        // 先用公开 API 直接验证目标设备是否存在（与运行时读取路径完全一致）
+        let options = IOOptionBits(kIOHIDOptionsTypeNone)
+        let manager = IOHIDManagerCreate(kCFAllocatorDefault, options)
+        IOHIDManagerSetDeviceMatching(manager, [
+            kIOHIDVendorIDKey as String: kAppleVendorID,
+            kIOHIDProductIDKey as String: kLidAngleProductID,
+            "PrimaryUsagePage": kUsagePageSensors,
+            "PrimaryUsage": kUsageLidAngle,
+        ] as CFDictionary)
+        if IOHIDManagerOpen(manager, options) == kIOReturnSuccess {
+            let devices = (IOHIDManagerCopyDevices(manager) as? Set<IOHIDDevice>) ?? []
+            lines.append("Lid Angle Sensor 设备数: \(devices.count)")
+            if let angle = readCurrentAngle(from: devices) {
+                lines.append("当前角度读数: \(String(format: "%.1f", angle))°  ← 传感器工作正常")
+            } else if !devices.isEmpty {
+                lines.append("设备已找到，但暂时读不到角度值（可稍后重试）。")
+            }
+            IOHIDManagerClose(manager, options)
+        } else {
+            lines.append("HID Manager 打开失败。")
+        }
         lines.append("")
 
         guard let client = IOHIDEventSystemClientCreate(kCFAllocatorDefault) else {
@@ -263,28 +313,17 @@ final class LidAngleSensor {
 
         let probe = LidAngleSensor()
         var lidCount = 0
-
         for (i, s) in all.enumerated() {
-            let product = probe.stringProperty(s, kKeyProduct) ?? "?"
+            let product = probe.stringProperty(s, "Product" as CFString) ?? "?"
             let lower = product.lowercased()
-            let isLid = lower.contains("lid") || lower.contains("angle")
-            guard isLid else { continue }          // 报告只保留疑似项，避免刷屏
+            guard lower.contains("lid") || lower.contains("angle") || lower == "las" else { continue }
             lidCount += 1
-
-            let transport = probe.stringProperty(s, kKeyTransport) ?? "?"
-            let up = probe.intProperty(s, kKeyUsagePage).map { String(format: "0x%04X", $0) } ?? "?"
-            let us = probe.intProperty(s, kKeyUsage).map { String(format: "0x%04X", $0) } ?? "?"
-            lines.append("[\(i)] Product=\(product)  Transport=\(transport)  usagePage=\(up)  usage=\(us)   ← 疑似铰链角度传感器")
-
-            // 逐个候选事件类型/字段试读，找出真正输出角度的组合
+            lines.append("[\(i)] Product=\(product)   ← 疑似铰链角度传感器")
             for type in [Int64(1), 10, 11, 13, 20] {
-                for offset in [0, 1, 2] {
-                    guard let ev = IOHIDServiceClientCopyEvent(s, type, 0, 0) else { continue }
-                    let field = Int32((Int(type) << 16) | offset)
-                    let v = IOHIDEventGetFloatValue(ev, field)
-                    if v.isFinite, v != 0 {
-                        lines.append("      可读值 type=\(type) field=\(field) → \(String(format: "%.3f", v))")
-                    }
+                guard let ev = IOHIDServiceClientCopyEvent(s, type, 0, 0) else { continue }
+                let v = IOHIDEventGetFloatValue(ev, Int32((Int(type) << 16)))
+                if v.isFinite, v != 0 {
+                    lines.append("      事件值 type=\(type) → \(String(format: "%.3f", v))")
                 }
             }
         }
@@ -292,13 +331,16 @@ final class LidAngleSensor {
         lines.append("")
         if lidCount > 0 {
             lines.append("结论: 找到 \(lidCount) 个疑似铰链角度传感器（见上方标注行）。")
-            lines.append("      若读数在 0~180 之间且随开合变化，把它对应的 usagePage / usage 与可读值的 type / field 填进 config.json。")
         } else {
-            lines.append("结论: 本机没有任何名称含 lid / angle 的 HID 服务。")
+            lines.append("结论: 本机没有任何名称含 lid / angle / las 的 HID 服务。")
             lines.append("      说明这台机器没有「Lid Angle Sensor」硬件，角度跟随无法工作——这是硬件限制，不是程序问题。")
-            lines.append("      此时仍可用设置面板的「预览动画」按钮查看渲染效果。")
+            lines.append("      此时仍可用设置面板的「手动预览」滑块体验折叠动画。")
         }
         return write(lines)
+    }
+
+    private func stringProperty(_ service: CFTypeRef, _ key: CFString) -> String? {
+        IOHIDServiceClientCopyProperty(service, key) as? String
     }
 
     private static func write(_ lines: [String]) -> String {
