@@ -245,6 +245,46 @@ final class HingeAnimationEngine {
     private var demoLink: Timer?
     private var demoStart: CFTimeInterval = 0
     private var demoDuration: Double = 2.6
+    /// 单向过渡的起止进度（playSingle 用）
+    private var singleFrom: Double = 0
+    private var singleTo: Double = 1
+
+    // MARK: - 单向过渡（无铰链传感器机型的替代触发）
+
+    /// 播放一次单向过渡：从当前进度平滑走到 target（0 = 完全合上，1 = 完全展开）。
+    /// 用于没有 Lid Angle Sensor 的机型（改由合盖/开盖事件或手动调用触发）。
+    func playSingle(to target: Double, duration: Double = 0.6) {
+        guard config.enabled else { return }
+        cancelCatchUp()
+        demoLink?.invalidate()
+        singleFrom = min(max(progress, 0), 1)
+        singleTo = min(max(target, 0), 1)
+        let timer = Timer(timeInterval: 1.0 / 60.0, target: self,
+                          selector: #selector(singleTick(_:)), userInfo: nil, repeats: true)
+        RunLoop.main.add(timer, forMode: .common)
+        demoLink = timer
+        demoStart = CACurrentMediaTime()
+        demoDuration = max(duration, 0.15)
+        phase = .tracking
+        sequenceTarget = singleTo
+        emit()
+    }
+
+    @objc private func singleTick(_ timer: Timer) {
+        let elapsed = CACurrentMediaTime() - demoStart
+        let k = min(elapsed / demoDuration, 1)
+        let eased = k * k * (3 - 2 * k)          // smoothstep：两端缓入缓出，观感更自然
+        progress = singleFrom + (singleTo - singleFrom) * eased
+        lastAngleDeg = config.closedAngle + progress * (config.openAngle - config.closedAngle)
+        if k >= 1 {
+            timer.invalidate()
+            demoLink = nil
+            phase = .idle
+            sequenceTarget = nil
+            progress = singleTo                   // 端点收敛：1 → 覆盖层自动隐藏，回到正常画面
+        }
+        emit()
+    }
 
     // MARK: - 输出
 

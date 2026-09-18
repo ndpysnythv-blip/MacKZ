@@ -10,6 +10,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var engine: HingeAnimationEngine!
     /// 覆盖渲染层；延后创建并且可为空，保证它的任何异常都不会影响菜单栏
     private var overlay: OverlayController?
+    /// 无铰链角度传感器机型是否已切换到替代触发（开盖 / 合盖事件）
+    private var fallbackTriggersEnabled = false
     private var status: StatusBarController!
     private var settings: SettingsWindowController!
 
@@ -72,7 +74,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         sensor.onStatus = { [weak self] text in
-            DispatchQueue.main.async { self?.status?.setSensorStatus(text) }
+            DispatchQueue.main.async {
+                self?.status?.setSensorStatus(text)
+                // 本机没有铰链角度传感器（如 MacBook Air 2020/M1）→ 自动切换到开盖/合盖触发
+                if text.contains("未检测到") { self?.enableFallbackTriggers() }
+            }
         }
 
         if config.enabled {
@@ -213,6 +219,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         default:
             break
         }
+    }
+
+    // MARK: - 无传感器机型的替代触发
+
+    /// 本机没有 Lid Angle Sensor（如 MacBook Air 2020/M1）时启用替代触发：
+    /// - 开盖 / 唤醒 → 播放「展开」动画（屏幕亮起，效果最明显）
+    /// - 合盖 / 即将睡眠 → 播放「合上」动画（系统随即休眠，通常只来得及看到开头）
+    private func enableFallbackTriggers() {
+        guard !fallbackTriggersEnabled else { return }
+        fallbackTriggersEnabled = true
+
+        let center = NSWorkspace.shared.notificationCenter
+        center.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
+            NSLog("[MacKZ] 唤醒（开盖）→ 播放展开动画")
+            self?.engine.playSingle(to: 1.0, duration: 0.7)
+        }
+        center.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { [weak self] _ in
+            NSLog("[MacKZ] 即将睡眠（合盖）→ 播放合上动画")
+            self?.engine.playSingle(to: 0.0, duration: 0.4)
+        }
+
+        status?.setSensorStatus("无传感器，已用开盖/合盖触发")
+        NSLog("[MacKZ] 本机无铰链角度传感器，已切换为「开盖唤醒 / 合盖睡眠」触发模式")
     }
 
     // MARK: - 屏幕录制权限
