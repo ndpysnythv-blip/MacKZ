@@ -31,6 +31,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         status.onProbe = { [weak self] in self?.runProbe() }
         status.onRequestCapture = { [weak self] in self?.requestCapturePermission() }
         status.onDemo = { [weak self] in self?.engine.playDemo() }
+        status.onCheckUpdate = { [weak self] in self?.checkUpdate() }
         status.onQuit = { NSApp.terminate(nil) }
 
         // ---------- 可视化设置面板 ----------
@@ -39,6 +40,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settings.onReload = { [weak self] in self?.reloadConfig() }
         settings.onProbe = { [weak self] in self?.runProbe() }
         settings.onDemo = { [weak self] in self?.engine.playDemo() }
+        settings.onCheckUpdate = { [weak self] in self?.checkUpdate() }
         settings.onRequestCapture = { [weak self] in self?.requestCapturePermission() }
         settings.statusProvider = { [weak self] in
             guard let self else { return (angle: "--", phase: "--", capture: "未知") }
@@ -148,6 +150,52 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         _ = LidAngleSensor.probe()
         notify("探针报告已生成", "已保存并打开：\(LidAngleSensor.reportURL.path)")
         NSWorkspace.shared.activateFileViewerSelecting([LidAngleSensor.reportURL])
+    }
+
+    // MARK: - 更新
+
+    /// 检查 GitHub Release 是否有新版本
+    private func checkUpdate() {
+        UpdateChecker.check { [weak self] result in
+            guard let self else { return }
+            switch result {
+            case .failure(let error):
+                self.notify("检查更新失败", error.localizedDescription)
+            case .success(.none):
+                self.notify("已是最新版本", "当前版本 \(UpdateChecker.currentVersion)。")
+            case .success(.some(let release)):
+                self.promptUpdate(release)
+            }
+        }
+    }
+
+    /// 询问用户并执行更新（下载 → 退出 → 脚本替换 → 重启）
+    private func promptUpdate(_ release: UpdateChecker.Release) {
+        let alert = NSAlert()
+        alert.messageText = "发现新版本 \(release.version)"
+        let notes = release.notes.trimmingCharacters(in: .whitespacesAndNewlines)
+        alert.informativeText = "当前版本：\(UpdateChecker.currentVersion)\n\n"
+            + (notes.isEmpty ? "（该版本没有附加说明）" : String(notes.prefix(600)))
+        alert.addButton(withTitle: "立即更新并重启")
+        alert.addButton(withTitle: "打开发布页")
+        alert.addButton(withTitle: "稍后")
+        switch alert.runModal() {
+        case .alertFirstButtonReturn:
+            notify("正在下载更新", "下载完成后 MacKZ 会自动退出并重启，期间屏幕可能短暂闪动。")
+            UpdateChecker.downloadAndInstall(release) { [weak self] result in
+                switch result {
+                case .success:
+                    NSApp.terminate(nil)      // 交棒给更新脚本完成替换与重启
+                case .failure(let error):
+                    self?.notify("更新失败", error.localizedDescription + "\n可到发布页手动下载。")
+                    NSWorkspace.shared.open(release.pageURL)
+                }
+            }
+        case .alertSecondButtonReturn:
+            NSWorkspace.shared.open(release.pageURL)
+        default:
+            break
+        }
     }
 
     // MARK: - 屏幕录制权限

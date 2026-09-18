@@ -1,0 +1,62 @@
+name: Build & Release
+
+# 触发方式：
+#   1) 推送 v* 标签（如 v1.1.0）→ 自动构建并发布 Release（含 MacKZ.zip）
+#   2) 手动运行（Actions 页面 → Run workflow）→ 只上传构建产物，不发 Release
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    # macos-14 = Apple Silicon 运行器；铰链角度传感器只存在于 M 系列机型，故只出 arm64
+    runs-on: macos-14
+    steps:
+      - name: 拉取源码
+        uses: actions/checkout@v4
+
+      - name: 环境信息
+        run: |
+          sw_vers
+          swiftc --version
+          echo "ARCH=$(uname -m)"
+
+      - name: 编译并打包 MacKZ.app
+        run: ARCH=arm64 ./build.sh
+
+      - name: 压缩为 zip（ditto 可保留 bundle 权限与签名结构）
+        run: |
+          cd build
+          ditto -c -k --sequesterRsrc --keepParent MacKZ.app MacKZ.zip
+          shasum -a 256 MacKZ.zip | tee MacKZ.zip.sha256
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: MacKZ-app
+          path: |
+            build/MacKZ.zip
+            build/MacKZ.zip.sha256
+
+      - name: 发布 Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            build/MacKZ.zip
+            build/MacKZ.zip.sha256
+          generate_release_notes: true
+          body: |
+            ### 安装
+            1. 下载 `MacKZ.zip`，双击解压得到 `MacKZ.app`
+            2. 把 `MacKZ.app` 拖进「应用程序」文件夹
+            3. 首次打开：右键 →「打开」（未签名应用需此步骤放行）
+            4. 首次启动会自动申请「屏幕录制」权限，授权后程序会自动重启生效
+
+            ### 更新
+            菜单栏图标 →「检查更新…」，有新版本会提示一键下载安装并重启。

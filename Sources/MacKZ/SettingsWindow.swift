@@ -19,6 +19,8 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     var onProbe: (() -> Void)?
     /// 预览一次开合动画
     var onDemo: (() -> Void)?
+    /// 检查更新（下载并自替换重启）
+    var onCheckUpdate: (() -> Void)?
     /// 实时状态拉取：角度 / 阶段 / 屏幕录制权限
     var statusProvider: (() -> (angle: String, phase: String, capture: String))?
 
@@ -177,9 +179,10 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         let reloadButton = makeButton("放弃修改并重载", #selector(reloadFromDisk))
         let probeButton = makeButton("传感器探针", #selector(probe))
         let demoButton = makeButton("预览动画", #selector(demo))
+        let updateButton = makeButton("检查更新", #selector(checkUpdate))
         let applyButton = makeButton("保存并应用", #selector(apply), emphasized: true)
-        stack.addArrangedSubview(sectionBox(title: "操作", rows: [
-            makeRow(views: [resetButton, reloadButton, probeButton, demoButton, applyButton])
+        stack.addArrangedSubview(sectionBox(title: "操作（当前版本 \(UpdateChecker.currentVersion)）", rows: [
+            makeRow(views: [resetButton, reloadButton, probeButton, demoButton, updateButton, applyButton])
         ]))
     }
 
@@ -385,6 +388,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
 
     @objc private func probe() { onProbe?() }
     @objc private func demo() { onDemo?() }
+    @objc private func checkUpdate() { onCheckUpdate?() }
 
     private func flashStatus(_ text: String) {
         statusLabel?.stringValue = text

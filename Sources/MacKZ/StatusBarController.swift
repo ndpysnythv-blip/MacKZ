@@ -1,6 +1,6 @@
 import AppKit
 
-/// 菜单栏控制器：插件启停、参数热重载、角度标定、传感器探针、打开设置面板。
+/// 菜单栏控制器：插件启停、参数热重载、角度标定、传感器探针、打开设置面板、检查更新。
 final class StatusBarController: NSObject, NSMenuDelegate {
 
     enum Calibration { case closed, open }
@@ -13,6 +13,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     var onProbe: (() -> Void)?
     var onRequestCapture: (() -> Void)?
     var onDemo: (() -> Void)?
+    var onCheckUpdate: (() -> Void)?
     var onQuit: (() -> Void)?
 
     /// 弱引用引擎，仅用于菜单里展示实时状态
@@ -67,6 +68,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         menu.addItem(makeItem("打开配置文件…", #selector(openConfig)))
         menu.addItem(makeItem("传感器探针（生成诊断报告）", #selector(probe)))
         menu.addItem(.separator())
+        menu.addItem(makeItem("检查更新…", #selector(checkUpdate)))
         menu.addItem(makeItem("退出 MacKZ", #selector(quit)))
 
         menu.delegate = self
@@ -129,5 +131,6 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     @objc private func probe() { onProbe?() }
     @objc private func requestCapture() { onRequestCapture?() }
     @objc private func demo() { onDemo?() }
+    @objc private func checkUpdate() { onCheckUpdate?() }
     @objc private func quit() { onQuit?() }
 }
