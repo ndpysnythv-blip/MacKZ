@@ -75,8 +75,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.engine.playSingle(to: 0.0, duration: 2.2, replayIfFinished: true)
         }
         settings.onSetSleepDisabled = { [weak self] disabled in self?.setSleepDisabled(disabled) }
-        settings.onRecheckRemote = { [weak self] in self?.remote.recheck() }
-        settings.onOpenLocalNetwork = { AppDelegate.openLocalNetworkSettings() }
+        settings.onRefreshRemote = { [weak self] in self?.restartRemote() }
         settings.onOpenHomepage = { NSWorkspace.shared.open(UpdateChecker.homepageURL) }
         settings.statusProvider = { [weak self] in
             guard let self else { return (angle: "--", phase: "--", capture: "未知") }
@@ -118,7 +117,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         // 按配置启停手机遥控
         if config.remoteControl {
-            remote.start(port: UInt16(clamping: config.remoteControlPort))
+            remote.start(port: UInt16(clamping: config.remoteControlPort), https: config.phoneGyro)
         }
 
         // 传感器线程 -> 主线程（30Hz 级别的派发开销可忽略）
@@ -197,6 +196,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         phoneHingeWatchdog = timer
     }
 
+    // MARK: - 手机遥控
+
+    /// 重新生成手机遥控地址（换 Wi-Fi、IP 变了、或口令失效时用）。
+    /// 重启监听会重新读一次局域网 IP 并换一个随机口令，手机上旧链接随即失效。
+    private func restartRemote() {
+        guard config.remoteControl else {
+            remoteStatus = "未启动"
+            settings.refreshRemoteInfo()
+            return
+        }
+        remote.start(port: UInt16(clamping: config.remoteControlPort), https: config.phoneGyro)
+        settings.refreshRemoteInfo()
+    }
+
     // MARK: - 配置应用
 
     /// 设置面板「保存并应用」：写盘 + 热重载引擎、渲染层、传感器
@@ -213,9 +226,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         status.setEnabledState(config.enabled)
 
-        // 手机遥控跟着配置热重启（开关/端口可能已改）
+        // 手机遥控跟着配置热重启（开关/端口/是否 HTTPS 可能已改）
         if config.remoteControl {
-            remote.start(port: UInt16(clamping: config.remoteControlPort))
+            remote.start(port: UInt16(clamping: config.remoteControlPort), https: config.phoneGyro)
         } else {
             remote.stop()
             remoteStatus = "未启动"
@@ -337,45 +350,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// 询问用户并执行更新（下载 → 退出 → 脚本替换 → 重启）
     private func promptUpdate(_ release: UpdateChecker.Release) {
-        let alert = NSAlert()
-        alert.messageText = "发现新版本 \(release.version)"
-        alert.informativeText = "当前版本：\(UpdateChecker.currentVersion)"
-
-        // 更新说明放进固定高度的滚动区域：
-        // 之前把 600 字说明塞进 informativeText，会把按钮挤出弹窗，用户根本找不到按钮。
-        let notes = release.notes.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !notes.isEmpty {
-            let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 430, height: 130))
-            scroll.hasVerticalScroller = true
-            scroll.borderType = .bezelBorder
-            scroll.drawsBackground = true
-            let textView = NSTextView(frame: scroll.bounds)
-            textView.isEditable = false
-            textView.isSelectable = true
-            textView.drawsBackground = false
-            textView.font = .systemFont(ofSize: 11)
-            textView.textContainerInset = NSSize(width: 6, height: 6)
-            textView.string = notes
-            scroll.documentView = textView
-            alert.accessoryView = scroll
-        }
-
-        alert.addButton(withTitle: "立即更新并重启")
-        alert.addButton(withTitle: "打开官网")
-        alert.addButton(withTitle: "查看更新说明")
-        alert.addButton(withTitle: "稍后")
-
-        // 本应用没有 Dock 图标，弹窗可能被其它窗口挡住，这里强制置顶
-        switch present(alert) {
-        case .alertFirstButtonReturn:
-            beginUpdate(release)
-        case .alertSecondButtonReturn:
-            NSWorkspace.shared.open(UpdateChecker.homepageURL)
-        case .alertThirdButtonReturn:
-            NSWorkspace.shared.open(release.pageURL)
-        default:
-            break
-        }
+        MacKZDialog(title: "发现新版本 \(release.version)",
+                    message: "当前版本：\(UpdateChecker.currentVersion)",
+                    notes: release.notes,
+                    buttons: ["立即更新并重启", "打开官网", "查看更新说明", "稍后"]) { [weak self] index in
+            switch index {
+            case 0: self?.beginUpdate(release)
+            case 1: NSWorkspace.shared.open(UpdateChecker.homepageURL)
+            case 2: NSWorkspace.shared.open(release.pageURL)
+            default: break
+            }
+        }.show()
     }
 
     // MARK: - 无传感器机型的替代触发
@@ -426,33 +411,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 NSLog("[MacKZ] 更新包下载完成，退出以便替换并重启")
                 NSApp.terminate(nil)          // 交棒给更新脚本完成替换与重启
             case .failure(let error):
-                self?.showUpdateFailure(error, release: release)
+                self?.showUpdateFailure(error)
             }
         })
     }
 
     /// 更新失败提示：给出具体错误 + 可用的兜底安装方式
-    private func showUpdateFailure(_ error: Error, release: UpdateChecker.Release) {
-        let alert = NSAlert()
-        alert.messageText = "更新下载失败"
-        alert.informativeText = """
-        \(error.localizedDescription)
+    private func showUpdateFailure(_ error: Error) {
+        MacKZDialog(title: "更新下载失败",
+                    message: """
+                    \(error.localizedDescription)
 
-        GitHub 的更新资源域名在部分网络环境下不稳定。可以改用终端命令安装（走 git 拉源码，通常更容易连通）：
-        """
-        alert.addButton(withTitle: "复制终端命令")
-        alert.addButton(withTitle: "打开官网")
-        alert.addButton(withTitle: "关闭")
-        switch present(alert) {
-        case .alertFirstButtonReturn:
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(UpdateChecker.terminalInstallCommand, forType: .string)
-            notify("命令已复制", "粘贴到「终端」里执行，即可安装最新版本。")
-        case .alertSecondButtonReturn:
-            NSWorkspace.shared.open(UpdateChecker.homepageURL)
-        default:
-            break
-        }
+                    已自动尝试 GitHub 直连与多个加速节点。若仍失败，可用终端一键安装（多镜像下载，通常更容易连通）：
+                    """,
+                    buttons: ["复制终端命令", "打开官网", "关闭"]) { [weak self] index in
+            switch index {
+            case 0:
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(UpdateChecker.terminalInstallCommand, forType: .string)
+                self?.notify("命令已复制", "粘贴到「终端」里执行，即可安装最新版本。")
+            case 1:
+                NSWorkspace.shared.open(UpdateChecker.homepageURL)
+            default:
+                break
+            }
+        }.show()
     }
 
     // MARK: - 屏幕录制权限
@@ -477,7 +460,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// 菜单/面板主动申请：给出明确结果提示
+    /// 菜单/面板「授权屏幕录制」：只负责「申请权限」这一件事。
+    ///
+    /// 这里刻意**不再**顺带弹出「修复权限」对话框：修复流程最后会再调用本方法，
+    /// 两个弹窗互相调用会让用户点几次就开始来回弹（重复循环）。
+    /// 修复权限只能从「修复屏幕录制权限」入口进入。
     private func requestCapturePermission() {
         if CGPreflightScreenCaptureAccess() {
             notify("已获得屏幕录制权限", "现在可以实时重投影桌面画面了。")
@@ -488,61 +475,60 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             relaunch(afterGrant: true)
             return
         }
-        // 走到这里说明系统不再弹窗：绝大多数情况是「更新后签名变化，旧的授权记录失配」。
-        // 表现就是：系统设置里明明勾着 MacKZ，程序却一直显示未授权，再点授权也没反应。
-        let alert = NSAlert()
-        alert.messageText = "授权未生效"
-        alert.informativeText = """
-        MacKZ 使用的是本地临时签名，每次更新后签名都会变化，
-        系统里保留的仍是上一个版本的授权记录，因此会出现“设置里已勾选、程序却说未授权”。
+        // 走到这里说明系统这次不会再弹授权框（通常是之前拒绝过，或被系统记住不再询问）
+        MacKZDialog(title: "请在系统设置里勾选 MacKZ",
+                    message: """
+                    系统这次没有弹出授权框，一般是因为之前拒绝过。
 
-        点「修复权限」会自动清除这些过期记录，然后重新向你申请一次。
-        """
-        alert.addButton(withTitle: "修复权限")
-        alert.addButton(withTitle: "打开系统设置")
-        alert.addButton(withTitle: "稍后")
-        switch present(alert) {
-        case .alertFirstButtonReturn:
-            repairCapturePermission()
-        case .alertSecondButtonReturn:
-            openPrivacySettings()
-        default:
-            break
-        }
+                    请到「系统设置 → 隐私与安全性 → 屏幕录制」中勾选 MacKZ，然后重新启动本插件。
+
+                    如果列表里已经勾选却仍显示未授权（更新后常见），请用菜单里的「修复屏幕录制权限」清除过期记录。
+                    """,
+                    buttons: ["打开系统设置", "好"]) { [weak self] index in
+            if index == 0 { self?.openPrivacySettings() }
+        }.show()
     }
 
     /// 清除本应用的「屏幕录制」授权记录（tccutil reset），让系统重新询问。
     /// 这是解决“更新后再也无法授权”的标准做法。
+    ///
+    /// 两点注意：
+    /// 1) tccutil 是外部进程，等它退出要几秒，放后台线程跑，否则界面会假死（点了没反应）；
+    /// 2) 清完只再申请一次，绝不再弹「修复权限」对话框（否则会来回循环）。
     private func repairCapturePermission() {
         let bundleID = Bundle.main.bundleIdentifier ?? "com.mackz.plugin"
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/usr/bin/tccutil")
-        task.arguments = ["reset", "ScreenCapture", bundleID]
-        do {
-            try task.run()
-            task.waitUntilExit()
-            guard task.terminationStatus == 0 else { throw CocoaError(.executableLoad) }
-            NSLog("[MacKZ] 已清除屏幕录制授权记录：%@", bundleID)
-            notify("旧记录已清除",
-                   "点「好」后 MacKZ 会重新申请权限，请在系统弹窗中点「允许」。\n若没有弹窗，请重启 MacKZ 再点一次「授权屏幕录制」。")
-            requestCapturePermission()
-        } catch {
-            notify("自动清除失败",
-                   "请在终端手动执行下面这条命令，然后重启 MacKZ：\n\ntccutil reset ScreenCapture \(bundleID)")
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let task = Process()
+            task.executableURL = URL(fileURLWithPath: "/usr/bin/tccutil")
+            task.arguments = ["reset", "ScreenCapture", bundleID]
+            var succeeded = false
+            do {
+                try task.run()
+                task.waitUntilExit()
+                succeeded = task.terminationStatus == 0
+            } catch {
+                succeeded = false
+            }
+
+            DispatchQueue.main.async {
+                guard let self else { return }
+                if succeeded {
+                    NSLog("[MacKZ] 已清除屏幕录制授权记录：%@", bundleID)
+                    self.notify("旧记录已清除",
+                                "点「好」后 MacKZ 会重新申请一次「屏幕录制」权限，请在系统弹窗里点「允许」。") {
+                        self.requestCapturePermission()
+                    }
+                } else {
+                    self.notify("自动清除失败",
+                                "请在终端手动执行下面这条命令，然后重启 MacKZ：\n\ntccutil reset ScreenCapture \(bundleID)")
+                }
+            }
         }
     }
 
     /// 打开「系统设置 → 隐私与安全性 → 屏幕录制」面板
     private func openPrivacySettings() {
         guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") else { return }
-        NSWorkspace.shared.open(url)
-    }
-
-    /// 打开「系统设置 → 隐私与安全性 → 本地网络」。
-    /// macOS 15 起监听/访问局域网需要用户授权；没授权时手机与 Mac 明明在同一 Wi-Fi，
-    /// 手机却打不开遥控页面（表现为「已丢失网络连接」）。
-    private static func openLocalNetworkSettings() {
-        guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_LocalNetwork") else { return }
         NSWorkspace.shared.open(url)
     }
 
@@ -559,38 +545,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.terminate(nil)
     }
 
-    /// 统一配置弹窗：弹窗必须永远压在最上面，并且必须真的能点到。
-    /// 层级用全局最高的 macKZTopWindowLevel（覆盖动画层 999、设置面板 1200）；
-    /// 交互性靠 macKZBeginInteractive（临时切成普通 App 抢到焦点，否则第一次点击会被系统吞掉）。
-    @discardableResult
-    private func present(_ alert: NSAlert) -> NSApplication.ModalResponse {
-        let window = alert.window
-        window.level = macKZTopWindowLevel
-        window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
-        window.animationBehavior = .none
-        window.hidesOnDeactivate = false
-
-        let previousPolicy = macKZBeginInteractive()
-        defer { macKZEndInteractive(previousPolicy) }
-
-        window.makeKeyAndOrderFront(nil)
-        window.orderFrontRegardless()
-        // 模态会话期间再压一次层级：
-        // NSAlert 弹出时会重新布局窗口，个别系统版本上会把 level 改回模态面板默认值（8），
-        // 那一瞬间弹窗就会被覆盖动画层/设置面板盖住 —— 排队再设一次，保证始终在最上面。
-        DispatchQueue.main.async {
-            window.level = macKZTopWindowLevel
-            window.orderFrontRegardless()
-        }
-        return alert.runModal()
-    }
-
-    /// 极简提示（统一走 present，保证不会被设置面板/覆盖层挡住）
-    private func notify(_ title: String, _ text: String) {
-        let alert = NSAlert()
-        alert.messageText = title
-        alert.informativeText = text
-        alert.addButton(withTitle: "好")
-        present(alert)
+    /// 极简提示。统一走 MacKZDialog：
+    /// 非模态 + nonactivatingPanel + 按钮接受首次点击，不会被系统吞掉，也不会把 App 卡在模态会话里。
+    /// - Parameter then: 用户点掉提示后要接着做的事（例如清完权限记录后重新申请）
+    private func notify(_ title: String, _ text: String, then: (() -> Void)? = nil) {
+        MacKZDialog(title: title, message: text, buttons: ["好"]) { _ in then?() }.show()
     }
 }

@@ -49,19 +49,16 @@ final class RemoteControl {
 
     // MARK: - 启停
 
-    func start(port: UInt16) {
+    /// 启动监听。
+    /// - Parameter https: 是否用 HTTPS 起服务。手机陀螺仪需要安全上下文（https），
+    ///   但自签证书在手机上一定会先弹一次「证书不受信任」，兼容性不如 HTTP，
+    ///   所以默认走 HTTP，由设置面板的「手机陀螺仪铰链模式」开关决定。
+    func start(port: UInt16, https: Bool) {
         stop()
         self.port = port
         // 每次启动换一个口令，重启插件后旧链接自动失效
         token = String(UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(6)).lowercased()
-        startListener(secure: true)      // 先试 HTTPS，自检不通过会自动回退 HTTP
-    }
-
-    /// 重新自检一次（设置面板「重新检测连接」）。不改口令，手机上已打开的链接继续有效。
-    func recheck() {
-        guard isRunning else { return }
-        onStatus?("正在自检…")
-        runSelfCheck()
+        startListener(secure: https)
     }
 
     /// 起监听。
@@ -486,7 +483,7 @@ final class RemoteControl {
           document.getElementById('gyroStart').onclick = function () {
             // 运动传感器只在安全上下文（https / localhost）下开放，http 局域网地址会被浏览器直接拒绝
             if (!window.isSecureContext) {
-              gyroTipEl.textContent = '当前不是安全上下文：请用 MacKZ 设置面板里那个 https:// 开头的地址打开本页（会提示证书不受信任，点「继续访问」即可）。';
+              gyroTipEl.textContent = '当前不是安全上下文（http）：请先在 Mac 的「设置 → 手机遥控」里打开「陀螺仪模式（HTTPS）」，再用新地址打开本页（会提示证书不受信任，点「继续访问」即可）。';
               return;
             }
             if (!window.DeviceMotionEvent) {

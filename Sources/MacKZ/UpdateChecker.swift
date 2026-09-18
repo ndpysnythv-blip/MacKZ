@@ -396,32 +396,11 @@ private final class UpdateDownloader: NSObject, URLSessionDownloadDelegate {
 
 // MARK: - 顶层窗口层级
 
-/// 弹窗与更新进度窗统一使用的层级。
-/// 必须高于覆盖动画层（999）与设置面板（1200），否则会被自己的窗口压住 ——
-/// 用户反馈的「更新弹窗老是在下面」就是这个原因。3000 只是「足够高」的示意值，
-/// macOS 允许任意整数层级，层级比较优先于同层内窗口的前后顺序。
-let macKZTopWindowLevel = NSWindow.Level(rawValue: 3000)
-
 /// 让「需要用户点击」的窗口真正可用。
-///
-/// 本应用是 LSUIElement（没有 Dock 图标），而 macOS 14 起禁止应用无条件抢焦点：
-/// 后台弹出的窗口，第一次点击会被系统拿去「尝试激活应用」而不送给按钮，
-/// 用户看到的现象就是「弹窗明明在最上面，按钮却怎么点都没反应」。
-/// 所以弹出前临时把自己变成普通 App（有 Dock 图标）并激活，弹出后立刻切回无图标模式。
-///
-/// 返回值是原来的激活策略，必须交给 macKZEndInteractive 还原。
-func macKZBeginInteractive() -> NSApplication.ActivationPolicy {
-    let previous = NSApp.activationPolicy()
-    if previous != .regular { _ = NSApp.setActivationPolicy(.regular) }
-    NSApp.activate(ignoringOtherApps: true)
-    NSRunningApplication.current.activate(options: [.activateAllWindows, .activateIgnoringOtherApps])
-    return previous
-}
-
-/// 与 macKZBeginInteractive() 配对：还原激活策略（回到无 Dock 图标）
-func macKZEndInteractive(_ previous: NSApplication.ActivationPolicy) {
-    if previous != .regular { _ = NSApp.setActivationPolicy(previous) }
-}
+/// 说明：本应用是 LSUIElement（无 Dock 图标），macOS 14 起无法无条件抢焦点，
+/// 所以弹窗一律走 `MacKZDialog`（nonactivatingPanel + 接受首次点击的按钮），
+/// 不再依赖「临时切换激活策略」这类副作用较大的做法。
+let macKZTopWindowLevel = NSWindow.Level(rawValue: 3000)
 
 // MARK: - 下载进度窗口
 
@@ -435,18 +414,17 @@ final class UpdateProgressWindow: NSObject {
     private let titleLabel = NSTextField(labelWithString: "")
     private let detailLabel = NSTextField(labelWithString: "")
     private let bar = NSProgressIndicator()
-    /// 用 FirstMouseButton：应用不在前台时第一次点击也要能生效
-    private let cancelButton = FirstMouseButton()
+    /// 用 MacKZDialogButton：应用不在前台时第一次点击也要能生效（否则「取消」点不动）
+    private let cancelButton = MacKZDialogButton()
     /// 右下角署名：作者 logo + KDXZHX
     private let logoView = NSImageView()
     private let authorLabel = NSTextField(labelWithString: "KDXZHX")
-    /// 弹出时临时改过激活策略，关闭时必须还原（见 macKZBeginInteractive）
-    private var previousPolicy: NSApplication.ActivationPolicy?
 
     override init() {
-        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 420, height: 168),
-                          styleMask: [.titled],
-                          backing: .buffered, defer: false)
+        // nonactivatingPanel：点它不需要先激活 App，鼠标事件直接进面板
+        window = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 420, height: 168),
+                         styleMask: [.titled, .nonactivatingPanel],
+                         backing: .buffered, defer: false)
         super.init()
         window.title = "MacKZ 更新"
         window.isReleasedWhenClosed = false
@@ -516,10 +494,9 @@ final class UpdateProgressWindow: NSObject {
         titleLabel.stringValue = "正在下载 MacKZ \(version)"
         detailLabel.stringValue = "准备中…"
         window.level = macKZTopWindowLevel
-        // 临时切成普通 App 抢到焦点：否则后台弹出的进度窗，第一次点击会被系统吞掉（「取消」点不动）
-        previousPolicy = macKZBeginInteractive()
         window.makeKeyAndOrderFront(nil)
         window.orderFrontRegardless()
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     /// fraction < 0 表示不确定进度（连接中 / 重试中）
@@ -540,22 +517,10 @@ final class UpdateProgressWindow: NSObject {
     func close() {
         bar.stopAnimation(nil)
         window.orderOut(nil)
-        // 还原激活策略：回到无 Dock 图标的菜单栏应用
-        if let policy = previousPolicy {
-            macKZEndInteractive(policy)
-            previousPolicy = nil
-        }
     }
 
     @objc private func cancelTapped() {
         onCancel?()
         close()
     }
-}
-
-/// 允许「应用不在前台时的第一次点击」直接落到按钮上。
-/// 无 Dock 图标的 App 在后台弹窗时，系统会把第一次点击吞掉用于激活应用，
-/// 用户看到的现象就是「按钮点不动」。
-private final class FirstMouseButton: NSButton {
-    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }

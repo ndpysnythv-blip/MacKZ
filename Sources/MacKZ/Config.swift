@@ -64,8 +64,10 @@ struct Config: Codable {
     var remoteControl = true
     /// 手机遥控端口
     var remoteControlPort = 52800
-    /// 是否允许手机陀螺仪接管铰链角度（手机贴在屏幕上模拟铰链，适合没有 Lid Angle Sensor 的机型）
-    var phoneGyro = true
+    /// 手机陀螺仪铰链模式：开启后手机遥控服务改用 HTTPS（读取运动传感器必须安全上下文）。
+    /// 默认关闭：HTTPS 用的是本机自签证书，手机上首次打开一定会先弹「证书不受信任」，
+    /// 所以默认走兼容性最好、不需要任何证书确认的 HTTP。
+    var phoneGyro = false
     /// 启动后自动检查更新（发现新版本才提示，平时完全静默）
     var autoCheckUpdate = true
 

@@ -33,10 +33,8 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     var onSetSleepDisabled: ((Bool) -> Void)?
     /// 手机遥控信息：是否启用、访问地址、运行状态
     var remoteInfoProvider: (() -> (enabled: Bool, url: String, status: String))?
-    /// 重新检测手机遥控连通性（重跑本机 + 局域网自检）
-    var onRecheckRemote: (() -> Void)?
-    /// 打开「系统设置 → 隐私与安全性 → 本地网络」（不授权手机就连不上）
-    var onOpenLocalNetwork: (() -> Void)?
+    /// 「刷新地址」：重新监听（重新读局域网 IP 并换一个随机口令）
+    var onRefreshRemote: (() -> Void)?
     /// 打开官网介绍页
     var onOpenHomepage: (() -> Void)?
     /// 实时状态拉取：角度 / 阶段 / 屏幕录制权限
@@ -172,34 +170,38 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         remoteState.lineBreakMode = .byTruncatingMiddle
         remoteLabel = remoteState
         let remoteTip = NSTextField(wrappingLabelWithString:
-            "手机与 Mac 连同一个 Wi-Fi，用手机浏览器打开上面的地址，即可远程控制折叠动画（合上 / 打开 / 播放一次 / 拖动进度），适合演示给别人看。\n"
-            + "地址中的 t=xxxx 是本次随机生成的访问口令，只在局域网内有效，重启插件后会重新生成。\n"
-            + "地址是 https:// 开头（本机自签证书）：手机首次打开会提示「证书不受信任」，点「显示详细信息 → 继续访问」即可。\n"
-            + "手机打不开时先点「重新检测连接」：状态行会直接告诉你卡在哪一段 —— 本机正常但手机连不上，"
-            + "几乎都是 macOS 的「本地网络」权限没给（点右边按钮去开启），或者当前 Wi-Fi 开了「访客网络」隔断设备互访。")
+            "手机与 Mac 连同一个 Wi-Fi，用手机浏览器打开上面的地址，即可远程控制折叠动画（合上 / 打开 / 播放一次 / 拖动进度）。\n"
+            + "地址里的 t=xxxx 是本次随机生成的口令，只在局域网内有效；换了 Wi-Fi 或 IP 变了，点「刷新地址」重新生成。\n\n"
+            + "打不开时按顺序排查：\n"
+            + "① 手机和 Mac 是否在同一个 Wi-Fi（路由器的「访客网络」会隔断设备互访）；\n"
+            + "②「系统设置 → 网络 → 防火墙」是否拦住了 MacKZ 的传入连接；\n"
+            + "③ macOS 15 起还需要在「隐私与安全性 → 本地网络」里允许 MacKZ；\n"
+            + "④ 开了「陀螺仪模式」后地址会变成 https，手机首次打开要点「显示详细信息 → 继续访问」。")
         remoteTip.font = .systemFont(ofSize: 11)
         remoteTip.textColor = .tertiaryLabelColor
-        remoteTip.preferredMaxLayoutWidth = 520
+        remoteTip.preferredMaxLayoutWidth = 500
         // 陀螺仪用法说明：手机没有铰链传感器也能靠姿态角驱动折叠动画
         let gyroTip = NSTextField(wrappingLabelWithString:
-            "陀螺仪铰链模式：把手机竖着贴（或用皮筋绑）在 MacBook 屏幕上，手机页面点「启用陀螺仪」，"
-            + "手机姿态角就会实时换算成屏幕开合角，替代本机铰链传感器驱动折叠动画 —— 适合没有 Lid Angle Sensor 的机型。\n"
-            + "首次使用请在合上屏幕时点一次「标定为完全合上」；手机锁屏或切到后台会自动交回本机传感器。"
-            + "读取运动传感器必须走 HTTPS，所以请用上面 https:// 的地址打开。")
+            "陀螺仪模式：把手机竖着贴（或用皮筋绑）在 MacBook 屏幕上、手机顶部朝屏幕顶边，"
+            + "手机页面点「启用陀螺仪」并允许「运动与方向访问」，手机姿态角就会实时换算成屏幕开合角，"
+            + "替代本机铰链传感器 —— 适合没有 Lid Angle Sensor 的机型。\n"
+            + "首次使用请在合上屏幕时点一次「标定为完全合上」；手机锁屏或切到后台会自动交回本机传感器。\n"
+            + "读取运动传感器必须走 HTTPS，所以打开这个开关后地址会变成 https。")
         gyroTip.font = .systemFont(ofSize: 11)
         gyroTip.textColor = .tertiaryLabelColor
-        gyroTip.preferredMaxLayoutWidth = 520
+        gyroTip.preferredMaxLayoutWidth = 500
+
+        // 这两段说明很长，默认折叠，需要时点标题展开，避免把面板撑得过长
+        let remoteHelp = collapsibleBox(title: "使用说明 / 打不开时的排查（点击展开）",
+                                        rows: [remoteTip, gyroTip])
+
         stack.addArrangedSubview(sectionBox(title: "手机遥控（演示用）", rows: [
             makeRow(views: [remoteState]),
             makeRow(views: [makeButton("复制链接", #selector(copyRemoteURL)),
-                            makeButton("在本机打开", #selector(openRemoteURL)),
                             makeButton("刷新地址", #selector(refreshRemoteURL))]),
-            makeRow(views: [makeButton("重新检测连接", #selector(recheckRemote)),
-                            makeButton("打开本地网络设置", #selector(openLocalNetwork))]),
             switchRow("启用手机遥控", \.remoteControl),
-            switchRow("允许手机陀螺仪接管角度", \.phoneGyro),
-            remoteTip,
-            gyroTip
+            switchRow("陀螺仪模式（HTTPS）", \.phoneGyro),
+            remoteHelp
         ]))
 
         // ---------- 常用（只放新手真正会调的几项） ----------
@@ -617,21 +619,11 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         flashStatus("手机遥控地址已复制：\(url)")
     }
 
-    @objc private func openRemoteURL() {
-        guard let text = remoteInfoProvider?().url, let url = URL(string: text) else { return }
-        NSWorkspace.shared.open(url)
-    }
-
-    /// 重新跑一次手机遥控连通性自检（结果由 remoteInfoProvider 的 status 回显）
-    @objc private func recheckRemote() { onRecheckRemote?() }
-
-    /// 打开「系统设置 → 隐私与安全性 → 本地网络」
-    @objc private func openLocalNetwork() { onOpenLocalNetwork?() }
-
     /// 打开官网介绍页
     @objc private func openHomepage() { onOpenHomepage?() }
 
-    @objc private func refreshRemoteURL() { refreshRemoteInfo() }
+    /// 刷新地址：真的重新起一次监听（重新读局域网 IP + 换一个新口令），而不是只刷新文字显示
+    @objc private func refreshRemoteURL() { onRefreshRemote?() }
 
     /// 刷新「合盖不休眠」当前的实际系统状态（读 pmset，开销很小，只在需要时调用）
     func refreshSleepState() {
