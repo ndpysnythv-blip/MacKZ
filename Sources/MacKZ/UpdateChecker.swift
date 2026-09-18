@@ -444,7 +444,6 @@ final class UpdateProgressWindow: NSObject {
         bar.widthAnchor.constraint(equalToConstant: 380).isActive = true
 
         cancelButton.title = "取消"
-        cancelButton.bezelStyle = .rounded
         cancelButton.target = self
         cancelButton.action = #selector(cancelTapped)
 

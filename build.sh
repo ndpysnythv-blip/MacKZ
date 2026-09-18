@@ -34,13 +34,13 @@ fi
 echo "    swiftc: $(swiftc --version 2>/dev/null | head -n 1)"
 
 # 公共编译参数（frameworks 一次给全：IOKit=读铰链传感器，Metal/ScreenCaptureKit=实时重投影渲染，
-# Network=手机遥控的局域网服务，Security=手机遥控的本地自签证书 TLS）
+# Network=手机遥控的局域网 HTTP 服务）
 COMMON_FLAGS=(
   -O
   -whole-module-optimization
   -framework Cocoa -framework IOKit -framework QuartzCore -framework CoreGraphics
   -framework Metal -framework ScreenCaptureKit -framework CoreVideo -framework CoreMedia
-  -framework Network -framework Security
+  -framework Network
 )
 
 rm -rf "$APP"

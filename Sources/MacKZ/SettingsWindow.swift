@@ -171,15 +171,14 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         remoteLabel = remoteState
         let remoteTip = NSTextField(wrappingLabelWithString:
             "手机与 Mac 连同一个 Wi-Fi，用手机浏览器打开上面的地址，即可远程控制折叠动画（合上 / 打开 / 播放一次 / 拖动进度）。\n"
-            + "服务用 HTTPS 起（本机自签证书）：手机首次打开会提示「证书不受信任」，点「显示详细信息 → 继续访问」即可。\n"
+            + "服务只监听本机局域网端口，用纯 http（不使用证书，因此不会出现任何钥匙串授权弹窗）。\n"
             + "地址里的 t=xxxx 是本次随机生成的口令，只在局域网内有效；换了 Wi-Fi 或 IP 变了，点「刷新地址」重新生成。\n\n"
             + "打不开时按顺序排查：\n"
-            + "① 是否点过「继续访问」—— 自签证书必须手动放行一次，否则页面不会加载；\n"
-            + "②「系统设置 → 网络 → 防火墙」是否拦住了 MacKZ 的传入连接；\n"
-            + "③ macOS 15 起还需要在「隐私与安全性 → 本地网络」里允许 MacKZ；\n"
-            + "④ 手机和 Mac 是否在同一个 Wi-Fi（路由器的「访客网络」会隔断设备互访）；\n"
-            + "⑤ 若 Safari 报「已启用『仅限 HTTPS』」：该地址已被 Safari 记成必须 HTTPS，"
-            + "请改用面板上的 https 地址，或到「设置 → Safari → 高级」里关掉「仅限 HTTPS」。")
+            + "①「系统设置 → 网络 → 防火墙」是否拦住了 MacKZ 的传入连接；\n"
+            + "② macOS 15 起还需要在「隐私与安全性 → 本地网络」里允许 MacKZ；\n"
+            + "③ 手机和 Mac 是否在同一个 Wi-Fi（路由器的「访客网络」会隔断设备互访）；\n"
+            + "④ 若 Safari 报「导览失败…已启用『仅限 HTTPS』的 HTTP URL」：说明该地址曾被 https 访问过，"
+            + "Safari 记住了它。请到「设置 → Safari → 高级」里关掉「仅限 HTTPS」，或改用另一个端口（高级设置 → 手机遥控端口）。")
         remoteTip.font = .systemFont(ofSize: 11)
         remoteTip.textColor = .tertiaryLabelColor
         remoteTip.preferredMaxLayoutWidth = 500
@@ -189,14 +188,14 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             + "手机页面点「启用陀螺仪」并允许「运动与方向访问」，手机姿态角就会实时换算成屏幕开合角，"
             + "替代本机铰链传感器 —— 适合没有 Lid Angle Sensor 的机型。\n"
             + "首次使用请在合上屏幕时点一次「标定为完全合上」；手机锁屏或切到后台会自动交回本机传感器。\n"
-            + "读取运动传感器必须走 HTTPS —— 手机遥控服务固定用 HTTPS，正好满足这个要求。")
+            + "注意：iOS 只允许 https 页面读取运动传感器，而本服务为了不弹钥匙串授权框固定用 http，"
+            + "所以陀螺仪模式在手机上取不到数据 —— 遥控按钮与进度滑块不受影响，照常可用。")
         gyroTip.font = .systemFont(ofSize: 11)
         gyroTip.textColor = .tertiaryLabelColor
         gyroTip.preferredMaxLayoutWidth = 500
 
         // 这两段说明很长，默认折叠，需要时点标题展开，避免把面板撑得过长
-        let remoteHelp = collapsibleBox(title: "使用说明 / 打不开时的排查（点击展开）",
-                                        rows: [remoteTip, gyroTip])
+        let remoteHelp = collapsibleBox(title: "更多介绍", rows: [remoteTip, gyroTip])
 
         stack.addArrangedSubview(sectionBox(title: "手机遥控（演示用）", rows: [
             makeRow(views: [remoteState]),
@@ -335,6 +334,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
 
     /// 可折叠分区：默认收起，点标题展开。
     /// 目的是让新手只面对上面的常用项，细节参数不去干扰他。
+    /// 不用圆角背景框，只留一行蓝色链接标题，视觉更干净。
     private func collapsibleBox(title: String, rows: [NSView]) -> NSView {
         let content = NSStackView(views: rows)
         content.orientation = .vertical
@@ -347,8 +347,8 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         let inner = NSStackView(views: [disclosure.button, content])
         inner.orientation = .vertical
         inner.alignment = .leading
-        inner.spacing = 10
-        return decoratedBox(inner)
+        inner.spacing = 8
+        return inner
     }
 
     /// 统一的圆角背景容器
@@ -490,8 +490,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
 
     private func makeButton(_ title: String, _ action: Selector, emphasized: Bool = false) -> NSButton {
         let button = NSButton(title: title, target: self, action: action)
-        button.bezelStyle = .rounded
-        button.font = .systemFont(ofSize: 12, weight: emphasized ? .semibold : .regular)
+        // 保持系统原生按钮外观，不再改字号/样式
         if emphasized { button.keyEquivalent = "\r" }   // 回车即「保存并应用」
         return button
     }
@@ -668,7 +667,8 @@ private final class PopupHandler: NSObject {
     @objc func fire(_ sender: NSPopUpButton) { action(sender.titleOfSelectedItem ?? "") }
 }
 
-/// 折叠分区开关：点标题展开/收起内容，标题箭头同步变化
+/// 折叠分区开关：点标题展开/收起内容，标题箭头同步变化。
+/// 外观做成「一行蓝色链接」（无边框、不上底色），比原来带边框的按钮更简约。
 private final class DisclosureHandler: NSObject {
     let button: NSButton
     private let title: String
@@ -677,17 +677,28 @@ private final class DisclosureHandler: NSObject {
     init(title: String, content: NSView) {
         self.title = title
         self.content = content
-        self.button = NSButton(title: "▸ \(title)（点开查看）", target: nil, action: nil)
+        let b = NSButton(title: title, target: nil, action: nil)
+        b.isBordered = false                     // 去掉按钮边框，只留文字
+        b.setButtonType(.momentaryChange)        // 去掉按下时的灰色底
+        self.button = b
         super.init()
-        button.bezelStyle = .rounded
-        button.font = .systemFont(ofSize: 12, weight: .semibold)
-        button.target = self
-        button.action = #selector(toggle)
-        content.isHidden = true          // 默认收起
+        b.target = self
+        b.action = #selector(toggle)
+        content.isHidden = true                  // 默认收起
+        applyTitle()
+    }
+
+    /// 用 attributedTitle 上色：无边框按钮的彩色标题必须靠富文本，纯 title 会被渲染成黑色
+    private func applyTitle() {
+        let text = (content.isHidden ? "▸ " : "▾ ") + title
+        button.attributedTitle = NSAttributedString(string: text, attributes: [
+            .foregroundColor: NSColor.linkColor,        // 系统蓝，自动适配浅色/深色与强调色
+            .font: NSFont.systemFont(ofSize: 12.5, weight: .medium)
+        ])
     }
 
     @objc private func toggle() {
         content.isHidden.toggle()
-        button.title = content.isHidden ? "▸ \(title)（点开查看）" : "▾ \(title)"
+        applyTitle()
     }
 }

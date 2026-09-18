@@ -65,8 +65,8 @@ struct Config: Codable {
     /// 手机遥控端口
     var remoteControlPort = 52800
     /// 是否允许手机陀螺仪接管铰链角度（手机贴在屏幕上模拟铰链，适合没有 Lid Angle Sensor 的机型）。
-    /// 注意：手机遥控服务固定优先跑 HTTPS（Safari 会把访问过的地址记成「必须 HTTPS」），
-    /// 这个开关只决定 Mac 是否接受手机上报的角度。
+    /// 注意：手机遥控服务固定用纯 HTTP，而 iOS 只允许 https 页面读取运动传感器，
+    /// 所以手机上实际取不到陀螺仪数据；这个开关只决定 Mac 是否接受手机上报的角度。
     var phoneGyro = true
     /// 启动后自动检查更新（发现新版本才提示，平时完全静默）
     var autoCheckUpdate = true

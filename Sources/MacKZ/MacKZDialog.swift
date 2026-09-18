@@ -86,8 +86,7 @@ final class MacKZDialog: NSObject, NSWindowDelegate {
         for (index, buttonTitle) in buttons.enumerated().reversed() {
             let button = MacKZDialogButton(title: buttonTitle, target: self, action: #selector(buttonTapped(_:)))
             button.tag = index
-            button.bezelStyle = .rounded
-            button.font = .systemFont(ofSize: 12)
+            // 不覆盖按钮样式与字号：保持系统原生按压按钮外观（此前设过 12pt 字号，显得又小又丑）
             if index == 0 { button.keyEquivalent = "\r" }
             buttonViews.append(button)
         }

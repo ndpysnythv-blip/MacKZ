@@ -1,18 +1,19 @@
 import Darwin
 import Foundation
 import Network
-import Security
 
 /// 手机遥控（演示用）。
 ///
-/// 在 Mac 上开一个只监听局域网端口的极简 HTTP(S) 服务：
+/// 在 Mac 上开一个只监听局域网端口的极简 HTTP 服务：
 /// - `GET /`          返回手机控制页面（大按钮 + 进度滑块 + 陀螺仪铰链模式）
 /// - `GET /cmd?t=口令&action=close|open|play|progress&v=0.5` 触发动画
 /// - `GET /hinge?t=口令&v=93.4` 上报手机陀螺仪换算出的铰链角度
 ///
 /// 设计取舍：
 /// - 只用系统自带的 Network.framework，不引入任何第三方依赖；
-/// - 优先用自签证书起 HTTPS（手机陀螺仪必须安全上下文），失败自动回退 HTTP；
+/// - 固定使用纯 HTTP：曾为「手机陀螺仪需要安全上下文」改用自签证书 HTTPS，
+///   但 `SecPKCS12Import` 会把私钥导入登录钥匙串 —— 每次启动都弹钥匙串授权框，
+///   且授权等待卡在主线程导致整个 App 冻住、按钮全点不动。故彻底回到纯 HTTP。
 /// - 每次启动生成一个随机口令（地址里的 t=xxxx），避免同网段其它设备误触；
 /// - 只监听、不联网上报，不写任何文件，关闭开关即完全停止。
 final class RemoteControl {
@@ -38,51 +39,37 @@ final class RemoteControl {
     private var token = ""
 
     var isRunning: Bool { listener != nil }
-    /// 是否以 HTTPS 起监听（决定手机上应该打开哪个地址）
-    private(set) var isSecure = false
 
     /// 手机应访问的完整地址；未启动或取不到局域网 IP 时返回空串
     var accessURL: String {
         guard isRunning, !token.isEmpty, let ip = Self.localIPAddress() else { return "" }
-        return "\(isSecure ? "https" : "http")://\(ip):\(port)/?t=\(token)"
+        return "http://\(ip):\(port)/?t=\(token)"
     }
 
     // MARK: - 启停
 
-    /// 启动监听。
+    /// 启动监听（纯 HTTP）。
     ///
-    /// 固定优先用 HTTPS：
-    /// 1) 手机陀螺仪需要安全上下文，只有 https 才读得到运动传感器；
-    /// 2) 更重要的是 Safari 会把访问过的地址记成「必须 HTTPS」——之后再用 http 打开会被直接拦下，
-    ///    报错「导览失败，因为要求是针对已启用『仅限 HTTPS』的 HTTP URL」。
-    /// 拿不到可用证书时会自动回退 HTTP，并在状态行说明原因。
+    /// 历史教训：曾为手机陀螺仪需要的「安全上下文」改用本机自签证书起 HTTPS，
+    /// 但 `SecPKCS12Import` 会把私钥导入「登录钥匙串」，每次启动都会弹钥匙串授权框，
+    /// 授权等待还卡在主线程上 —— 表现就是整个 App 冻住、所有按钮点不动。
+    /// 所以这里固定纯 HTTP，不再碰钥匙串。
     func start(port: UInt16) {
         stop()
         self.port = port
         // 每次启动换一个口令，重启插件后旧链接自动失效
         token = String(UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(6)).lowercased()
-        startListener(secure: true)
+        startListener()
     }
 
-    /// 起监听。
-    /// - Parameter secure: true 时优先用自签证书起 HTTPS（手机陀螺仪需要安全上下文），
-    ///   拿不到证书或自检不通过都会落到 HTTP。
-    private func startListener(secure: Bool) {
+    /// 起监听（纯 HTTP）
+    private func startListener() {
         guard let nwPort = NWEndpoint.Port(rawValue: port) else {
             onStatus?("端口不合法（\(port)）")
             return
         }
-        var parameters = NWParameters.tcp
-        var usingTLS = false
-        if secure, let host = Self.localIPAddress(), let identity = RemoteTLS.identity(for: host) {
-            let tls = NWProtocolTLS.Options()
-            sec_protocol_options_set_local_identity(tls.securityProtocolOptions, identity)
-            sec_protocol_options_set_min_tls_protocol_version(tls.securityProtocolOptions, .TLSv12)
-            parameters = NWParameters(tls: tls, tcp: NWProtocolTCP.Options())
-            usingTLS = true
-        }
+        let parameters = NWParameters.tcp
         parameters.allowLocalEndpointReuse = true
-        isSecure = usingTLS
 
         do {
             let listener = try NWListener(using: parameters, on: nwPort)
@@ -92,7 +79,7 @@ final class RemoteControl {
                     guard let self else { return }
                     switch state {
                     case .ready:
-                        self.onStatus?(usingTLS ? "HTTPS 监听中，正在自检…" : "监听中，正在自检…")
+                        self.onStatus?("监听中，正在自检…")
                         self.runSelfCheck()
                     case .failed(let error):
                         self.onStatus?("启动失败：\(error.localizedDescription)")
@@ -112,10 +99,9 @@ final class RemoteControl {
     func stop() {
         stopListenerOnly()
         token = ""
-        isSecure = false
     }
 
-    /// 只停监听、保留口令（HTTPS 自检失败降级回 HTTP 时用）
+    /// 只停监听、保留口令
     private func stopListenerOnly() {
         listener?.cancel()
         listener = nil
@@ -127,31 +113,11 @@ final class RemoteControl {
     ///
     /// 起因：手机端报「打不开该网页，因为已丢失网络连接」时，Mac 这边完全看不出异常，
     /// 所以这里把两段路径都验一遍，并把结论直接写进设置面板的状态行：
-    ///  1) 回环（127.0.0.1）→ 验证监听与 TLS 握手真的可用；HTTPS 不通过就自动降级 HTTP；
+    ///  1) 回环（127.0.0.1）→ 验证监听本身可用；
     ///  2) 局域网 IP → 验证手机那条路径通不通（这一步也会触发 macOS 的「本地网络」权限询问）。
-    private func runSelfCheck(attempt: Int = 1) {
-        let secureNow = isSecure
+    private func runSelfCheck() {
         probe(host: "127.0.0.1") { [weak self] loopbackOK in
             guard let self else { return }
-            if secureNow, !loopbackOK, attempt < 2 {
-                // 刚起监听时首次 TLS 握手偶尔来不及，重试一次再决定要不要降级 ——
-                // 否则「本来能用的 HTTPS 被误降级成 HTTP」，手机端就会被 Safari 拦下
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
-                    self?.runSelfCheck(attempt: attempt + 1)
-                }
-                return
-            }
-            guard !(secureNow && !loopbackOK) else {
-                // HTTPS 在本机都握不上手，继续用下去只会让手机连不上，直接回退
-                NSLog("[MacKZ] HTTPS 自检未通过，自动回退 HTTP")
-                self.stopListenerOnly()
-                self.isSecure = false
-                self.onStatus?("HTTPS 证书在本机不可用，已回退 HTTP；如果手机提示「仅限 HTTPS」，请在 Safari 设置 → 高级里关掉该选项")
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
-                    self?.startListener(secure: false)
-                }
-                return
-            }
             guard let ip = RemoteControl.localIPAddress() else {
                 self.reportSelfCheck(loopbackOK: loopbackOK, lanOK: false)
                 return
@@ -177,14 +143,14 @@ final class RemoteControl {
     /// 向指定主机发一次 `GET /`，能拿到 200 就认为这条路径通。
     /// 只做连通性判断，不读取响应内容。
     private func probe(host: String, completion: @escaping (Bool) -> Void) {
-        guard let url = URL(string: "\(isSecure ? "https" : "http")://\(host):\(port)/") else {
+        guard let url = URL(string: "http://\(host):\(port)/") else {
             completion(false)
             return
         }
         let config = URLSessionConfiguration.ephemeral
-        config.timeoutIntervalForRequest = 6        // 刚起监听时握手可能偏慢，别把超时卡太死
+        config.timeoutIntervalForRequest = 6        // 刚起监听时可能偏慢，别把超时卡太死
         config.waitsForConnectivity = false
-        let session = URLSession(configuration: config, delegate: SelfSignedTrustDelegate(), delegateQueue: nil)
+        let session = URLSession(configuration: config)
         session.dataTask(with: url) { _, response, error in
             session.finishTasksAndInvalidate()
             let ok = error == nil && (response as? HTTPURLResponse)?.statusCode == 200
@@ -492,9 +458,11 @@ final class RemoteControl {
           }
 
           document.getElementById('gyroStart').onclick = function () {
-            // 运动传感器只在安全上下文（https / localhost）下开放，http 局域网地址会被浏览器直接拒绝
+            // 运动传感器只在安全上下文（https / localhost）下开放。
+            // 本服务固定 HTTP：HTTPS 自签证书会把私钥导入钥匙串、每次启动弹授权框，
+            // 代价太大，因此局域网 HTTP 下 iOS 取不到陀螺仪数据。
             if (!window.isSecureContext) {
-              gyroTipEl.textContent = '当前不是安全上下文（http）：请先在 Mac 的「设置 → 手机遥控」里打开「陀螺仪模式（HTTPS）」，再用新地址打开本页（会提示证书不受信任，点「继续访问」即可）。';
+              gyroTipEl.textContent = '当前是 http 局域网地址，iOS 只允许 https 页面读取运动传感器，所以陀螺仪模式在手机上不可用。开合动画的遥控按钮、滑块都不受影响。';
               return;
             }
             if (!window.DeviceMotionEvent) {
@@ -544,21 +512,5 @@ final class RemoteControl {
         </body>
         </html>
         """
-    }
-}
-
-/// 自检专用的 TLS 信任代理：接受本机自签证书。
-/// 只用于「Mac 自己访问自己」的连通性探测，不会修改系统任何信任设置，
-/// 也不影响手机浏览器上看到的证书提示（手机上仍需手动「继续访问」）。
-private final class SelfSignedTrustDelegate: NSObject, URLSessionDelegate {
-
-    func urlSession(_ session: URLSession, didReceive challenge: URLAuthenticationChallenge,
-                    completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
-        guard challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
-              let trust = challenge.protectionSpace.serverTrust else {
-            completionHandler(.performDefaultHandling, nil)
-            return
-        }
-        completionHandler(.useCredential, URLCredential(trust: trust))
     }
 }
