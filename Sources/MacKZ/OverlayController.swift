@@ -156,11 +156,14 @@ final class OverlayWindow: NSWindow {
         foldView.eyeDistance = config.eyeDistance
         foldView.renderScale = CGFloat(config.renderScale)
 
+        // 注意：必须调用 NSWindow 的「指定初始化器」init(contentRect:styleMask:backing:defer:)。
+        // 带 screen: 参数的那个是便利构造器，它内部会回调 self 的指定初始化器，
+        // 而子类没有实现该初始化器 → 运行时报 "Use of unimplemented initializer" 直接崩溃。
+        // 屏幕位置由 contentRect（全局坐标）决定，无需 screen 参数。
         super.init(contentRect: screen.frame,
                    styleMask: [.borderless],
                    backing: .buffered,
-                   defer: false,
-                   screen: screen)
+                   defer: false)
 
         isOpaque = false
         backgroundColor = .clear

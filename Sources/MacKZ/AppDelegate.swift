@@ -8,7 +8,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var config = ConfigStore.load()
     private let sensor = LidAngleSensor()
     private var engine: HingeAnimationEngine!
-    private var overlay: OverlayController!
+    /// 覆盖渲染层；延后创建并且可为空，保证它的任何异常都不会影响菜单栏
+    private var overlay: OverlayController?
     private var status: StatusBarController!
     private var settings: SettingsWindowController!
 
@@ -23,9 +24,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         engine.onUpdate = { [weak self] state in self?.overlay?.render(state) }
         status.engine = engine
 
-        // ---------- 覆盖渲染层（Metal 不可用时自动降级，不崩溃）----------
-        overlay = OverlayController(config: config)
-        overlay.onStatus = { [weak self] message in self?.status?.setRenderStatus(message) }
+        // ---------- 覆盖渲染层（延后创建：先让菜单栏稳定出现，渲染层的问题不影响菜单栏）----------
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+            guard let self else { return }
+            let controller = OverlayController(config: self.config)
+            controller.onStatus = { [weak self] message in self?.status?.setRenderStatus(message) }
+            self.overlay = controller
+            NSLog("[MacKZ] 渲染层已就绪")
+        }
 
         status.onToggleEnabled = { [weak self] on in self?.setEnabled(on) }
         status.onCalibrate = { [weak self] edge in self?.calibrate(edge) }
@@ -97,7 +103,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         config = newConfig
         ConfigStore.save(config)
         engine.apply(config: config)
-        overlay.apply(config: config)
+        overlay?.apply(config: config)
         sensor.stop()
         if config.enabled {
             sensor.start(with: config)
@@ -119,7 +125,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ConfigStore.save(config)
         engine.apply(config: config)
         engine.reset()                 // 清状态并隐藏覆盖层
-        overlay.apply(config: config)
+        overlay?.apply(config: config)
         settings?.sync(config: config)
         if on {
             sensor.start(with: config)
@@ -148,7 +154,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func reloadConfig() {
         config = ConfigStore.load()
         engine.apply(config: config)
-        overlay.apply(config: config)
+        overlay?.apply(config: config)
         settings?.sync(config: config)
         if config.enabled {
             sensor.stop()
@@ -236,7 +242,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func requestCapturePermission() {
         if CGPreflightScreenCaptureAccess() {
             notify("已获得屏幕录制权限", "现在可以实时重投影桌面画面了。")
-            overlay.apply(config: config)
+            overlay?.apply(config: config)
             return
         }
         if CGRequestScreenCaptureAccess() {
