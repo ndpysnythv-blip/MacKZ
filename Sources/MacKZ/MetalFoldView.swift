@@ -228,6 +228,5 @@ final class MetalFoldView: NSView {
         cmd.present(drawable)
         cmd.commit()
         ensureRunning()
-        _ = scale
     }
 }
