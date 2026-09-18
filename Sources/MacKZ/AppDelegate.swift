@@ -201,12 +201,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func promptUpdate(_ release: UpdateChecker.Release) {
         let alert = NSAlert()
         alert.messageText = "发现新版本 \(release.version)"
+        alert.informativeText = "当前版本：\(UpdateChecker.currentVersion)"
+
+        // 更新说明放进固定高度的滚动区域：
+        // 之前把 600 字说明塞进 informativeText，会把按钮挤出弹窗，用户根本找不到按钮。
         let notes = release.notes.trimmingCharacters(in: .whitespacesAndNewlines)
-        alert.informativeText = "当前版本：\(UpdateChecker.currentVersion)\n\n"
-            + (notes.isEmpty ? "（该版本没有附加说明）" : String(notes.prefix(600)))
+        if !notes.isEmpty {
+            let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 430, height: 130))
+            scroll.hasVerticalScroller = true
+            scroll.borderType = .bezelBorder
+            scroll.drawsBackground = true
+            let textView = NSTextView(frame: scroll.bounds)
+            textView.isEditable = false
+            textView.isSelectable = true
+            textView.drawsBackground = false
+            textView.font = .systemFont(ofSize: 11)
+            textView.textContainerInset = NSSize(width: 6, height: 6)
+            textView.string = notes
+            scroll.documentView = textView
+            alert.accessoryView = scroll
+        }
+
         alert.addButton(withTitle: "立即更新并重启")
         alert.addButton(withTitle: "打开发布页")
         alert.addButton(withTitle: "稍后")
+
+        // 本应用没有 Dock 图标，弹窗可能被其它窗口挡住，这里强制置顶
+        alert.window.level = NSWindow.Level(rawValue: 1400)
+        NSApp.activate(ignoringOtherApps: true)
         switch alert.runModal() {
         case .alertFirstButtonReturn:
             beginUpdate(release)
@@ -242,11 +264,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - 更新下载
 
-    /// 下载并安装更新：显示进度窗口；成功则退出并交棒给替换脚本
+    /// 下载并安装更新：显示进度窗口（可随时取消）；成功则退出并交棒给替换脚本
     private func beginUpdate(_ release: UpdateChecker.Release) {
         let progressWindow = UpdateProgressWindow()
         progressWindow.show(version: release.version)
         updateProgressWindow = progressWindow
+
+        // 允许随时取消：网络不通时不必干等
+        progressWindow.onCancel = { [weak self] in
+            UpdateChecker.cancelDownload()
+            self?.updateProgressWindow = nil
+            NSLog("[MacKZ] 用户取消更新下载")
+        }
 
         UpdateChecker.downloadAndInstall(release, progress: { [weak progressWindow] fraction, detail in
             progressWindow?.update(fraction: fraction, detail: detail)

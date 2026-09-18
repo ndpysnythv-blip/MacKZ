@@ -156,6 +156,12 @@ enum UpdateChecker {
         downloader.start()
     }
 
+    /// 取消正在进行的下载（用户点「取消」时调用）
+    static func cancelDownload() {
+        activeDownloader?.cancel()
+        activeDownloader = nil
+    }
+
     /// 生成替换脚本：等主进程退出 → 解压 → 覆盖原 .app → 清 TCC 旧记录 → 重新启动
     private static func makeInstallScript(updateDir: URL, zipPath: URL, targetApp: String) throws -> URL {
         let script = """
@@ -243,9 +249,9 @@ private final class UpdateDownloader: NSObject, URLSessionDownloadDelegate {
         lastError = nil
 
         let config = URLSessionConfiguration.default
-        config.timeoutIntervalForRequest = 30
-        config.timeoutIntervalForResource = 900          // 单个文件最长 15 分钟
-        config.waitsForConnectivity = true               // 网络暂时不可用时等待而不是立即失败
+        config.timeoutIntervalForRequest = 20
+        config.timeoutIntervalForResource = 180          // 单个文件最长 3 分钟，避免长时间卡在“加载中”
+        config.waitsForConnectivity = false              // 不通就尽快失败并重试，而不是无限等待
         config.requestCachePolicy = .reloadIgnoringLocalCacheData
         let session = URLSession(configuration: config, delegate: self, delegateQueue: nil)
         self.session = session
@@ -253,6 +259,13 @@ private final class UpdateDownloader: NSObject, URLSessionDownloadDelegate {
         let tip = attempt == 1 ? "正在连接 GitHub…" : "连接不稳定，正在重试（第 \(attempt)/\(Self.maxAttempts) 次）…"
         DispatchQueue.main.async { [weak self] in self?.progress(-1, tip) }
         session.downloadTask(with: release.zipURL).resume()
+    }
+
+    /// 取消下载：不再重试、不再回调
+    func cancel() {
+        finished = true
+        session?.invalidateAndCancel()
+        session = nil
     }
 
     // MARK: 下载进度
@@ -313,18 +326,23 @@ private final class UpdateDownloader: NSObject, URLSessionDownloadDelegate {
 
 // MARK: - 下载进度窗口
 
-/// 更新下载进度浮窗：显示进度条与实时状态，浮在所有窗口之上。
-final class UpdateProgressWindow {
+/// 更新下载进度浮窗：显示进度条与实时状态，浮在所有窗口之上，可随时取消。
+final class UpdateProgressWindow: NSObject {
+
+    /// 用户点击「取消」
+    var onCancel: (() -> Void)?
 
     private let window: NSWindow
     private let titleLabel = NSTextField(labelWithString: "")
     private let detailLabel = NSTextField(labelWithString: "")
     private let bar = NSProgressIndicator()
+    private let cancelButton = NSButton()
 
-    init() {
-        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 126),
+    override init() {
+        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 420, height: 168),
                           styleMask: [.titled],
                           backing: .buffered, defer: false)
+        super.init()
         window.title = "MacKZ 更新"
         window.isReleasedWhenClosed = false
         window.level = NSWindow.Level(rawValue: 1300)      // 高于设置面板与覆盖动画层
@@ -338,13 +356,23 @@ final class UpdateProgressWindow {
         bar.isIndeterminate = true          // 连接阶段先转圈，拿到总大小后切成实数进度
         bar.controlSize = .small
         bar.translatesAutoresizingMaskIntoConstraints = false
-        bar.widthAnchor.constraint(equalToConstant: 360).isActive = true
+        bar.widthAnchor.constraint(equalToConstant: 380).isActive = true
 
-        let stack = NSStackView(views: [titleLabel, bar, detailLabel])
+        cancelButton.title = "取消"
+        cancelButton.bezelStyle = .rounded
+        cancelButton.target = self
+        cancelButton.action = #selector(cancelTapped)
+
+        let buttonRow = NSStackView(views: [cancelButton])
+        buttonRow.orientation = .horizontal
+        buttonRow.alignment = .centerY
+        buttonRow.spacing = 8
+
+        let stack = NSStackView(views: [titleLabel, bar, detailLabel, buttonRow])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 10
-        stack.edgeInsets = NSEdgeInsets(top: 18, left: 20, bottom: 18, right: 20)
+        stack.edgeInsets = NSEdgeInsets(top: 18, left: 20, bottom: 16, right: 20)
         stack.translatesAutoresizingMaskIntoConstraints = false
 
         let container = NSView()
@@ -383,5 +411,10 @@ final class UpdateProgressWindow {
     func close() {
         bar.stopAnimation(nil)
         window.orderOut(nil)
+    }
+
+    @objc private func cancelTapped() {
+        onCancel?()
+        close()
     }
 }
