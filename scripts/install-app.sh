@@ -48,18 +48,47 @@ fi
 rm -rf "${APP_DST}"
 cp -R "${WORK}/${APP_NAME}.app" "${APP_DST}"
 
-# 双保险：去掉隔离属性 + 本地临时签名，确保双击即可打开
-xattr -dr com.apple.quarantine "${APP_DST}" 2>/dev/null || true
+echo "==> 清除系统隔离属性"
+# 关键步骤：只要还残留 com.apple.quarantine，未公证的应用就会被 Gatekeeper 拦住，
+# 且“系统设置 → 隐私与安全性”里可能连“仍要打开”都不出现。
+# 用 -cr 清掉全部扩展属性（不只是 quarantine），比 -dr 更彻底。
+if ! xattr -cr "${APP_DST}" 2>/dev/null; then
+  echo "    普通权限清除失败，稍后需要手动执行一次 sudo 命令（见文末）"
+fi
+
+echo "==> 重新做本地签名（避免解压后签名结构失效导致提示“已损坏”）"
 codesign --force --deep --sign - "${APP_DST}" >/dev/null 2>&1 || true
 
+# 校验隔离属性是否真的清干净了
+NEED_SUDO=0
+if xattr -p com.apple.quarantine "${APP_DST}" >/dev/null 2>&1; then
+  NEED_SUDO=1
+fi
+
 echo "==> 启动 MacKZ"
-open "${APP_DST}"
+open "${APP_DST}" 2>/dev/null || NEED_SUDO=1
+
+if [ "${NEED_SUDO}" = "1" ]; then
+  cat <<'TIP'
+
+【还差一步】系统仍带着隔离属性，请手动执行（会要求输入开机密码）：
+
+  sudo xattr -cr /Applications/MacKZ.app
+  sudo codesign --force --deep --sign - /Applications/MacKZ.app
+  open /Applications/MacKZ.app
+
+如果执行后依旧打不开，改用源码安装方式（本机编译不带隔离属性，最稳）：
+
+  curl -fsSL https://raw.githubusercontent.com/ndpysnythv-blip/MacKZ/main/scripts/install-from-source.sh | bash
+TIP
+  exit 0
+fi
 
 cat <<'TIP'
 
 安装完成
   1) 菜单栏出现笔记本图标，点「设置…」可调所有参数；
   2) 首次启动会自动申请「屏幕录制」权限，授权后程序自动重启生效；
-  3) 若仍被系统拦截，执行：xattr -dr com.apple.quarantine /Applications/MacKZ.app
+  3) 若仍被系统拦截，执行：sudo xattr -cr /Applications/MacKZ.app
   4) 卸载：rm -rf /Applications/MacKZ.app
 TIP

@@ -56,7 +56,7 @@ sleep 1
 echo "==> 安装到 /Applications"
 rm -rf "$APP_DST"
 cp -R "$APP_SRC" "$APP_DST"
-xattr -dr com.apple.quarantine "$APP_DST" 2>/dev/null || true
+xattr -cr "$APP_DST" 2>/dev/null || true
 codesign --force --deep --sign - "$APP_DST" >/dev/null 2>&1 || true
 
 mkdir -p "$SUPPORT"

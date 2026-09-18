@@ -7,31 +7,55 @@
 
 ## 快速开始
 
-### 方式一：终端一键安装（推荐，装完即可打开）
+### 方式一：源码一键安装（最推荐，不需要任何“信任”操作）
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ndpysnythv-blip/MacKZ/main/scripts/install-from-source.sh | bash
+```
+
+本机拉源码 → 本机编译 → 装到「应用程序」→ 设置开机自启。
+产物**不带 `com.apple.quarantine` 隔离属性**，双击即可打开，系统设置里也不会出现拦截提示。
+需要 Xcode Command Line Tools，脚本会自动检测并引导安装。
+
+### 方式二：下载预编译版（快，但可能被 Gatekeeper 拦）
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ndpysnythv-blip/MacKZ/main/scripts/install-app.sh | bash
 ```
 
-脚本会自动下载最新版、装到「应用程序」、去掉隔离属性并启动。
-（`curl` 下载的文件不带 `com.apple.quarantine`，所以不会被 Gatekeeper 拦截。）
-
-### 方式二：浏览器下载
-
-1. 打开 [Releases](https://github.com/ndpysnythv-blip/MacKZ/releases/latest)，下载 `MacKZ.zip`
-2. 解压得到 `MacKZ.app`，拖进「应用程序」文件夹
-3. 浏览器下载的文件带隔离属性，首次打开会被系统拦下，执行这条命令放行即可：
+从 GitHub Release 拉取最新 `MacKZ.zip` 安装。若系统仍然拦下它，执行一次：
 
 ```bash
-xattr -dr com.apple.quarantine /Applications/MacKZ.app
+sudo xattr -cr /Applications/MacKZ.app
+sudo codesign --force --deep --sign - /Applications/MacKZ.app
 open /Applications/MacKZ.app
 ```
 
-4. 首次启动会自动申请「屏幕录制」权限，授权后程序自动重启让权限生效
-5. 菜单栏出现笔记本图标 → 点「设置…」调参
+### 方式三：浏览器下载
 
-**更新**：菜单栏 →「检查更新…」，有新版本即可一键下载、自动替换并重启。
-也可以随时 `git pull` 后用 `./install.sh` 重新编译安装（源码方式，见文末）。
+1. 打开 [Releases](https://github.com/ndpysnythv-blip/MacKZ/releases/latest)，下载 `MacKZ.zip`
+2. 解压得到 `MacKZ.app`，拖进「应用程序」
+3. 浏览器下载的文件一定带隔离属性，必须执行下面两条（**注意有 `sudo`**）：
+
+```bash
+sudo xattr -cr /Applications/MacKZ.app
+open /Applications/MacKZ.app
+```
+
+### 装好之后
+
+- 首次启动会自动申请「屏幕录制」权限，授权后程序自动重启让权限生效
+- 菜单栏出现笔记本图标 → 点「设置…」调参
+- 更新：菜单栏 →「检查更新…」，有新版本可一键下载替换并重启
+
+### 打不开时的排查顺序
+
+| 现象 | 处理 |
+| --- | --- |
+| “Apple 无法验证 MacKZ…” | `sudo xattr -cr /Applications/MacKZ.app` 后重新 `open` |
+| 系统设置里根本没有“仍要打开” | 隔离属性没清干净，用上面的 `sudo` 命令；必要时补一次 `sudo codesign --force --deep --sign -` |
+| 提示“MacKZ 已损坏，请移到废纸篓” | 解压导致签名结构失效，`sudo xattr -cr` + `sudo codesign --force --deep --sign -` 重新签名 |
+| 上面都没用 | 改用**方式一**源码安装，本机编译不带隔离属性，必定能开 |
 
 ---
 
