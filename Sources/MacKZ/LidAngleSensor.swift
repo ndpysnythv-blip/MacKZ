@@ -17,8 +17,9 @@ private func IOHIDEventSystemClientCopyServices(_ client: CFTypeRef) -> CFArray?
 @_silgen_name("IOHIDEventSystemClientScheduleWithRunLoop")
 private func IOHIDEventSystemClientScheduleWithRunLoop(_ client: CFTypeRef, _ runLoop: CFRunLoop, _ mode: CFString) -> Void
 
-@_silgen_name("IOHIDEventSystemClientUnscheduleFromRunLoop")
-private func IOHIDEventSystemClientUnscheduleFromRunLoop(_ client: CFTypeRef, _ runLoop: CFRunLoop, _ mode: CFString) -> Void
+// 说明：私有 API IOHIDEventSystemClientUnscheduleFromRunLoop 在部分 macOS 版本
+// （含 macOS 14/15 的部分 SDK）中没有导出符号，链接会报 Undefined symbols。
+// 本插件在 RunLoop 退出后即结束传感器线程、释放 client，因此无需手动 unschedule。
 
 @_silgen_name("IOHIDServiceClientCopyProperty")
 private func IOHIDServiceClientCopyProperty(_ service: CFTypeRef, _ key: CFString) -> CFTypeRef?
@@ -135,8 +136,7 @@ final class LidAngleSensor {
         self.timer = t
         CFRunLoopRun()   // 阻塞在传感器线程，直到 stop() 调用 CFRunLoopStop
 
-        // 线程收尾
-        IOHIDEventSystemClientUnscheduleFromRunLoop(client, rl ?? CFRunLoopGetCurrent(), CFRunLoopMode.defaultMode.rawValue)
+        // 线程收尾：RunLoop 已退出、线程即将结束，client 随引用释放即可
         service = nil
         self.client = nil
         t.invalidate()
