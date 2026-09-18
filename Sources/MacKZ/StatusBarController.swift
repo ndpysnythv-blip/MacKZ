@@ -33,17 +33,32 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         enabled = config.enabled
         buildMenu()
         if let button = statusItem.button {
-            // 优先用 SF Symbol；万一该符号名在当前系统不可用就退回文字，确保图标一定可见
-            if let image = NSImage(systemSymbolName: "laptopcomputer", accessibilityDescription: "MacKZ") {
-                image.isTemplate = true
-                button.image = image
-            } else {
-                button.title = "KZ"
-            }
+            button.image = StatusBarController.makeMenuBarIcon()
             button.toolTip = "MacKZ · 点击打开菜单"
         }
         refreshEnabled()
         NSLog("[MacKZ] 菜单栏图标已就绪")
+    }
+
+    /// 用代码绘制菜单栏图标（KZ 字样）。
+    /// 不依赖 SF Symbols：符号名在不同系统版本/机型上可能取不到，会得到一个空白图标而“看不见”。
+    /// 设为 template 后由系统自动适配浅色/深色菜单栏。
+    static func makeMenuBarIcon() -> NSImage {
+        let size = NSSize(width: 18, height: 18)
+        let image = NSImage(size: size)
+        image.lockFocus()
+        let text = "KZ" as NSString
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 11, weight: .bold),
+            .foregroundColor: NSColor.black       // template 模式下只看 alpha，颜色由系统决定
+        ]
+        let textSize = text.size(withAttributes: attributes)
+        let origin = NSPoint(x: (size.width - textSize.width) / 2,
+                             y: (size.height - textSize.height) / 2 + 0.5)
+        text.draw(at: origin, withAttributes: attributes)
+        image.unlockFocus()
+        image.isTemplate = true
+        return image
     }
 
     // MARK: - 菜单构建
