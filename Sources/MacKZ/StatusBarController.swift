@@ -56,6 +56,12 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         return logoIcon(pointSize: menuBarIconPointSize) ?? drawnIcon(size: size)
     }
 
+    /// 供其它窗口（如更新进度框的右下角署名）复用的 logo 图：
+    /// 与菜单栏图标同一套处理（去白底、裁留白、模板图），用 contentTintColor 渲染即可适配深浅外观。
+    static func logoMark(pointSize: CGFloat) -> NSImage? {
+        logoIcon(pointSize: pointSize)
+    }
+
     /// 把 logo 处理成适合菜单栏的图标。
     /// 原图是「白底 + 深色 KZ 图形」且四周留白很大（图形只占约 55%），直接缩放放进菜单栏
     /// 会是一个显眼的小白方块，所以这里做三件事：

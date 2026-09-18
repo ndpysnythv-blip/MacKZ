@@ -25,6 +25,7 @@ enum UpdateChecker {
     enum UpdateError: LocalizedError {
         case badResponse(Int)
         case noAsset
+        case badAsset
         case network(String)
         case cannotWrite(String)
 
@@ -32,6 +33,7 @@ enum UpdateChecker {
             switch self {
             case .badResponse(let code): return "服务器返回异常（HTTP \(code)）"
             case .noAsset:               return "该版本没有可下载的安装包"
+            case .badAsset:              return "下载到的不是有效安装包（加速节点返回了错误页），请重试或改用终端安装"
             case .network(let message):  return "网络错误：\(message)"
             case .cannotWrite(let path): return "没有写入权限：\(path)"
             }
@@ -42,6 +44,31 @@ enum UpdateChecker {
     /// 指向 install-raw.sh：它优先整包下载并带假死检测与多镜像回退，比 git 拉源码更适应受限网络
     static let terminalInstallCommand =
         "curl -fsSL https://raw.githubusercontent.com/ndpysnythv-blip/MacKZ/main/scripts/install-raw.sh | bash"
+
+    // MARK: - 下载源（GitHub 直连 + 加速镜像）
+
+    /// 国内常用的 GitHub 加速前缀（均已实测可正常拉取 Release 资源）。
+    /// 它们只是把同一个 release 直链反代一层，文件内容完全一致，
+    /// 用来解决「直连 GitHub 超时（网络错误 -1001）」——只影响下载，不影响检查更新。
+    /// 注意：这类公共服务会失效，所以是「整串依次尝试」而不是只用一个。
+    private static let acceleratorPrefixes = [
+        "https://ghfast.top/",
+        "https://gh-proxy.com/",
+        "https://ghproxy.net/",
+        "https://gh.xxooo.cf/",
+        "https://gitproxy.click/",
+    ]
+
+    /// 组装候选下载源：第 0 个始终是 GitHub 直链（网络好时最快），后面依次是各加速节点
+    static func downloadCandidates(for url: URL) -> [URL] {
+        guard let host = url.host, host.contains("github") else { return [url] }
+        var list = [url]
+        for prefix in acceleratorPrefixes {
+            guard let mirrored = URL(string: prefix + url.absoluteString), !list.contains(mirrored) else { continue }
+            list.append(mirrored)
+        }
+        return list
+    }
 
     // MARK: - 版本信息
 
@@ -141,7 +168,9 @@ enum UpdateChecker {
         }
         let zipPath = updateDir.appendingPathComponent("MacKZ.zip")
 
-        let downloader = UpdateDownloader(release: release, destination: zipPath, progress: progress) { result in
+        let downloader = UpdateDownloader(release: release,
+                                          candidates: downloadCandidates(for: release.zipURL),
+                                          destination: zipPath, progress: progress) { result in
             activeDownloader = nil
             switch result {
             case .failure(let error):
@@ -225,44 +254,64 @@ enum UpdateChecker {
 /// 用 URLSessionDownloadDelegate 拿到下载进度；失败自动重试，避免网络抖动一次就放弃。
 private final class UpdateDownloader: NSObject, URLSessionDownloadDelegate {
 
-    private static let maxAttempts = 3
+    /// 把所有候选源走完算一轮，最多两轮
+    private static let maxRounds = 2
 
     private let release: UpdateChecker.Release
+    /// 候选下载源：GitHub 直链 + 各加速镜像（内容一致，哪个通用哪个）
+    private let candidates: [URL]
     private let destination: URL
     private let progress: (Double, String) -> Void
     private let completion: (Result<Void, UpdateChecker.UpdateError>) -> Void
 
     private var session: URLSession?
-    private var attempt = 0
+    private var index = 0             // 当前候选源下标
+    private var round = 1             // 当前轮次
+    private var currentLabel = ""     // 当前源的名字（显示在进度文字里，方便确认走的是哪条通道）
     private var finished = false
     private var movedToDestination = false
     private var lastError: UpdateChecker.UpdateError?
 
-    init(release: UpdateChecker.Release, destination: URL,
+    init(release: UpdateChecker.Release, candidates: [URL], destination: URL,
          progress: @escaping (Double, String) -> Void,
          completion: @escaping (Result<Void, UpdateChecker.UpdateError>) -> Void) {
         self.release = release
+        self.candidates = candidates.isEmpty ? [release.zipURL] : candidates
         self.destination = destination
         self.progress = progress
         self.completion = completion
     }
 
+    /// 依次尝试候选源（直连 → 各加速节点），全部失败才整体重试一轮
     func start() {
-        attempt += 1
+        guard !finished else { return }
+        if index >= candidates.count {
+            guard round < Self.maxRounds else {
+                finish(.failure(lastError ?? .badResponse(-1)))
+                return
+            }
+            round += 1
+            index = 0
+        }
+        let isDirect = index == 0
+        let url = candidates[index]
+        currentLabel = isDirect ? "GitHub 直连" : (url.host ?? "加速节点")
+        index += 1
         movedToDestination = false
-        lastError = nil
 
         let config = URLSessionConfiguration.default
-        config.timeoutIntervalForRequest = 20
-        config.timeoutIntervalForResource = 180          // 单个文件最长 3 分钟，避免长时间卡在“加载中”
-        config.waitsForConnectivity = false              // 不通就尽快失败并重试，而不是无限等待
+        // 直连只给 8 秒：GitHub 不可达时连接会一直挂着，早失败早换加速节点
+        config.timeoutIntervalForRequest = isDirect ? 8 : 15
+        config.timeoutIntervalForResource = 120     // 单个源最长 2 分钟
+        config.waitsForConnectivity = false         // 不通就尽快失败并换源，而不是无限等待
         config.requestCachePolicy = .reloadIgnoringLocalCacheData
         let session = URLSession(configuration: config, delegate: self, delegateQueue: nil)
         self.session = session
 
-        let tip = attempt == 1 ? "正在连接 GitHub…" : "连接不稳定，正在重试（第 \(attempt)/\(Self.maxAttempts) 次）…"
+        let prefix = round > 1 ? "第 \(round) 轮 · " : ""
+        let tip = "\(prefix)\(currentLabel) · 正在连接…"
         DispatchQueue.main.async { [weak self] in self?.progress(-1, tip) }
-        session.downloadTask(with: release.zipURL).resume()
+        session.downloadTask(with: url).resume()
     }
 
     /// 取消下载：不再重试、不再回调
@@ -272,13 +321,23 @@ private final class UpdateDownloader: NSObject, URLSessionDownloadDelegate {
         session = nil
     }
 
+    /// 收尾（保证只回调一次）
+    private func finish(_ result: Result<Void, UpdateChecker.UpdateError>) {
+        guard !finished else { return }
+        finished = true
+        session?.finishTasksAndInvalidate()
+        session = nil
+        DispatchQueue.main.async { [weak self] in self?.completion(result) }
+    }
+
     // MARK: 下载进度
     func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask,
                     didWriteData bytesWritten: Int64, totalBytesWritten: Int64,
                     totalBytesExpectedToWrite: Int64) {
         guard totalBytesExpectedToWrite > 0 else { return }
         let fraction = min(max(Double(totalBytesWritten) / Double(totalBytesExpectedToWrite), 0), 1)
-        let text = String(format: "已下载 %.0f%%（%.0f KB / %.0f KB）",
+        let text = String(format: "%@ · 已下载 %.0f%%（%.0f KB / %.0f KB）",
+                          currentLabel,
                           fraction * 100,
                           Double(totalBytesWritten) / 1024,
                           Double(totalBytesExpectedToWrite) / 1024)
@@ -292,6 +351,12 @@ private final class UpdateDownloader: NSObject, URLSessionDownloadDelegate {
             lastError = .badResponse(http.statusCode)
             return
         }
+        // 校验文件头真的是 zip：加速节点偶尔会返回一个 HTML 错误页，
+        // 若当成成功交给替换脚本，解压会失败（甚至把已装好的 App 换坏），所以先拦下来换下一个源
+        guard Self.looksLikeZip(location) else {
+            lastError = .badAsset
+            return
+        }
         do {
             try? FileManager.default.removeItem(at: destination)
             try FileManager.default.moveItem(at: location, to: destination)
@@ -301,30 +366,31 @@ private final class UpdateDownloader: NSObject, URLSessionDownloadDelegate {
         }
     }
 
-    // MARK: 任务结束（成功或失败）
+    /// 文件头是不是 zip 的 "PK"
+    private static func looksLikeZip(_ url: URL) -> Bool {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return false }
+        defer { try? handle.close() }
+        guard let magic = try? handle.read(upToCount: 2) else { return false }
+        return magic == Data([0x50, 0x4B])
+    }
+
+    // MARK: 任务结束（成功则接着安装，失败则换下一个源继续）
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
         session.finishTasksAndInvalidate()
         self.session = nil
         guard !finished else { return }
 
         if movedToDestination {
-            finished = true
-            DispatchQueue.main.async { [weak self] in self?.completion(.success(())) }
+            finish(.success(()))
             return
         }
         if let error {
             lastError = .network((error as NSError).localizedDescription + "（代码 \((error as NSError).code)）")
         }
 
-        if attempt < Self.maxAttempts {
-            NSLog("[MacKZ] 下载失败（第 %d 次），1.2 秒后重试：%@",
-                  attempt, lastError?.localizedDescription ?? "未知")
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in self?.start() }
-        } else {
-            finished = true
-            let finalError = lastError ?? .badResponse(-1)
-            DispatchQueue.main.async { [weak self] in self?.completion(.failure(finalError)) }
-        }
+        NSLog("[MacKZ] 该下载源失败，换下一个源：%@", lastError?.localizedDescription ?? "未知")
+        // 稍等一下再换源：网络刚切换时连续重试容易连着失败
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in self?.start() }
     }
 }
 
@@ -336,12 +402,25 @@ private final class UpdateDownloader: NSObject, URLSessionDownloadDelegate {
 /// macOS 允许任意整数层级，层级比较优先于同层内窗口的前后顺序。
 let macKZTopWindowLevel = NSWindow.Level(rawValue: 3000)
 
-/// 把本应用激活到前台。
-/// 本应用是 LSUIElement（没有 Dock 图标），macOS 14 起 `activate(ignoringOtherApps:)` 已废弃且不再可靠，
-/// 因此再走一遍 NSRunningApplication，否则窗口虽然显示了却拿不到焦点、看起来像「弹在下面」。
-func macKZActivateSelf() {
+/// 让「需要用户点击」的窗口真正可用。
+///
+/// 本应用是 LSUIElement（没有 Dock 图标），而 macOS 14 起禁止应用无条件抢焦点：
+/// 后台弹出的窗口，第一次点击会被系统拿去「尝试激活应用」而不送给按钮，
+/// 用户看到的现象就是「弹窗明明在最上面，按钮却怎么点都没反应」。
+/// 所以弹出前临时把自己变成普通 App（有 Dock 图标）并激活，弹出后立刻切回无图标模式。
+///
+/// 返回值是原来的激活策略，必须交给 macKZEndInteractive 还原。
+func macKZBeginInteractive() -> NSApplication.ActivationPolicy {
+    let previous = NSApp.activationPolicy()
+    if previous != .regular { _ = NSApp.setActivationPolicy(.regular) }
     NSApp.activate(ignoringOtherApps: true)
     NSRunningApplication.current.activate(options: [.activateAllWindows, .activateIgnoringOtherApps])
+    return previous
+}
+
+/// 与 macKZBeginInteractive() 配对：还原激活策略（回到无 Dock 图标）
+func macKZEndInteractive(_ previous: NSApplication.ActivationPolicy) {
+    if previous != .regular { _ = NSApp.setActivationPolicy(previous) }
 }
 
 // MARK: - 下载进度窗口
@@ -356,7 +435,13 @@ final class UpdateProgressWindow: NSObject {
     private let titleLabel = NSTextField(labelWithString: "")
     private let detailLabel = NSTextField(labelWithString: "")
     private let bar = NSProgressIndicator()
-    private let cancelButton = NSButton()
+    /// 用 FirstMouseButton：应用不在前台时第一次点击也要能生效
+    private let cancelButton = FirstMouseButton()
+    /// 右下角署名：作者 logo + KDXZHX
+    private let logoView = NSImageView()
+    private let authorLabel = NSTextField(labelWithString: "KDXZHX")
+    /// 弹出时临时改过激活策略，关闭时必须还原（见 macKZBeginInteractive）
+    private var previousPolicy: NSApplication.ActivationPolicy?
 
     override init() {
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 420, height: 168),
@@ -385,7 +470,24 @@ final class UpdateProgressWindow: NSObject {
         cancelButton.target = self
         cancelButton.action = #selector(cancelTapped)
 
-        let buttonRow = NSStackView(views: [cancelButton])
+        // 右下角署名：作者 logo + KDXZHX
+        logoView.image = StatusBarController.logoMark(pointSize: 15)
+        logoView.contentTintColor = .secondaryLabelColor    // 模板图按次要文字色渲染，深浅色外观都清晰
+        logoView.imageScaling = .scaleProportionallyUpOrDown
+        logoView.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            logoView.widthAnchor.constraint(equalToConstant: 15),
+            logoView.heightAnchor.constraint(equalToConstant: 15)
+        ])
+        authorLabel.font = .systemFont(ofSize: 10, weight: .medium)
+        authorLabel.textColor = .tertiaryLabelColor
+
+        // 撑开的占位：把「取消」留在左边，把署名推到右下角
+        let spacer = NSView()
+        spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        spacer.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+
+        let buttonRow = NSStackView(views: [cancelButton, spacer, logoView, authorLabel])
         buttonRow.orientation = .horizontal
         buttonRow.alignment = .centerY
         buttonRow.spacing = 8
@@ -396,6 +498,8 @@ final class UpdateProgressWindow: NSObject {
         stack.spacing = 10
         stack.edgeInsets = NSEdgeInsets(top: 18, left: 20, bottom: 16, right: 20)
         stack.translatesAutoresizingMaskIntoConstraints = false
+        // 底部这行撑满宽度，署名才会贴在右下角（垂直 stack 是 leading 对齐，默认不拉伸子视图）
+        buttonRow.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
 
         let container = NSView()
         container.addSubview(stack)
@@ -412,7 +516,8 @@ final class UpdateProgressWindow: NSObject {
         titleLabel.stringValue = "正在下载 MacKZ \(version)"
         detailLabel.stringValue = "准备中…"
         window.level = macKZTopWindowLevel
-        macKZActivateSelf()
+        // 临时切成普通 App 抢到焦点：否则后台弹出的进度窗，第一次点击会被系统吞掉（「取消」点不动）
+        previousPolicy = macKZBeginInteractive()
         window.makeKeyAndOrderFront(nil)
         window.orderFrontRegardless()
     }
@@ -435,10 +540,22 @@ final class UpdateProgressWindow: NSObject {
     func close() {
         bar.stopAnimation(nil)
         window.orderOut(nil)
+        // 还原激活策略：回到无 Dock 图标的菜单栏应用
+        if let policy = previousPolicy {
+            macKZEndInteractive(policy)
+            previousPolicy = nil
+        }
     }
 
     @objc private func cancelTapped() {
         onCancel?()
         close()
     }
+}
+
+/// 允许「应用不在前台时的第一次点击」直接落到按钮上。
+/// 无 Dock 图标的 App 在后台弹窗时，系统会把第一次点击吞掉用于激活应用，
+/// 用户看到的现象就是「按钮点不动」。
+private final class FirstMouseButton: NSButton {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }

@@ -559,8 +559,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.terminate(nil)
     }
 
-    /// 统一配置弹窗：弹窗必须永远压在最上面，否则会被自己的窗口挡住（覆盖动画层 999、
-    /// 设置面板 1200、更新进度窗），所以这里用全局最高层级 + 主动激活 + 模态期间二次压层。
+    /// 统一配置弹窗：弹窗必须永远压在最上面，并且必须真的能点到。
+    /// 层级用全局最高的 macKZTopWindowLevel（覆盖动画层 999、设置面板 1200）；
+    /// 交互性靠 macKZBeginInteractive（临时切成普通 App 抢到焦点，否则第一次点击会被系统吞掉）。
     @discardableResult
     private func present(_ alert: NSAlert) -> NSApplication.ModalResponse {
         let window = alert.window
@@ -568,7 +569,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
         window.animationBehavior = .none
         window.hidesOnDeactivate = false
-        macKZActivateSelf()
+
+        let previousPolicy = macKZBeginInteractive()
+        defer { macKZEndInteractive(previousPolicy) }
+
         window.makeKeyAndOrderFront(nil)
         window.orderFrontRegardless()
         // 模态会话期间再压一次层级：
