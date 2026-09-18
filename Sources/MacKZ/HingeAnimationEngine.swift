@@ -265,11 +265,11 @@ final class HingeAnimationEngine {
     private var singleFrom: Double = 0
     private var singleTo: Double = 0
 
-    /// 自动播放一次「折上 → 展开」，方便确认渲染是否生效
-    func playDemo(duration: Double = 2.6) {
+    /// 自动播放一次「折上 → 展开」，方便确认渲染是否生效。重复点击会重新播放。
+    func playDemo(duration: Double = 4.0) {
         guard config.enabled else { return }
         cancelCatchUp()
-        guard demoTimer == nil else { return }
+        demoTimer?.invalidate()          // 重复点击：中断上一次，从头再播一次
         // macOS 上 CADisplayLink 不能直接 init（那是 iOS 的 API），演示动画用 60Hz 定时器驱动即可
         let timer = Timer(timeInterval: 1.0 / 60.0, target: self,
                           selector: #selector(demoTick(_:)), userInfo: nil, repeats: true)
@@ -330,12 +330,18 @@ final class HingeAnimationEngine {
 
     /// 播放一次单向过渡到 target（0 = 展开，1 = 折上）。
     /// 用于没有 Lid Angle Sensor 的机型（改由合盖/开盖事件触发）。
-    func playSingle(to target: Double, duration: Double = 0.6) {
+    /// - replayIfFinished: 若当前已在目标端，先回到另一端再播一次，便于「模拟合上/模拟打开」反复点击
+    func playSingle(to target: Double, duration: Double = 0.6, replayIfFinished: Bool = false) {
         guard config.enabled else { return }
         cancelCatchUp()
         demoTimer?.invalidate()
+        let goal = min(max(target, 0), 1)
+        if replayIfFinished, abs(progress - goal) < 0.02 {
+            progress = goal > 0.5 ? 0 : 1        // 已在终点：先回到起点，保证点击一定有动画
+            lastAngleDeg = angle(for: progress)
+        }
         singleFrom = min(max(progress, 0), 1)
-        singleTo = min(max(target, 0), 1)
+        singleTo = goal
         let timer = Timer(timeInterval: 1.0 / 60.0, target: self,
                           selector: #selector(singleTick(_:)), userInfo: nil, repeats: true)
         RunLoop.main.add(timer, forMode: .common)

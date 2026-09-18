@@ -346,7 +346,8 @@ final class UpdateProgressWindow: NSObject {
         super.init()
         window.title = "MacKZ 更新"
         window.isReleasedWhenClosed = false
-        window.level = NSWindow.Level(rawValue: 1300)      // 高于设置面板与覆盖动画层
+        window.level = NSWindow.Level(rawValue: 2000)      // 与弹窗同级：高于设置面板(1200)与覆盖动画层(999)
+        window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         window.center()
 
         titleLabel.font = .boldSystemFont(ofSize: 13)
@@ -390,8 +391,9 @@ final class UpdateProgressWindow: NSObject {
     func show(version: String) {
         titleLabel.stringValue = "正在下载 MacKZ \(version)"
         detailLabel.stringValue = "准备中…"
-        window.makeKeyAndOrderFront(nil)
+        window.level = NSWindow.Level(rawValue: 2000)
         NSApp.activate(ignoringOtherApps: true)
+        window.orderFrontRegardless()
     }
 
     /// fraction < 0 表示不确定进度（连接中 / 重试中）

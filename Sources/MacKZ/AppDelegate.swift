@@ -60,8 +60,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settings.onRequestCapture = { [weak self] in self?.requestCapturePermission() }
         settings.onRepairCapture = { [weak self] in self?.repairCapturePermission() }
         settings.onManualProgress = { [weak self] value in self?.engine.setManualProgress(value) }
-        settings.onSimulateClose = { [weak self] in self?.engine.playSingle(to: 1.0, duration: 0.7) }
-        settings.onSimulateOpen = { [weak self] in self?.engine.playSingle(to: 0.0, duration: 0.7) }
+        // 模拟动画放慢到 2.2 秒，方便观察；replayIfFinished 让两个按钮都能反复点击
+        settings.onSimulateClose = { [weak self] in
+            self?.engine.playSingle(to: 1.0, duration: 2.2, replayIfFinished: true)
+        }
+        settings.onSimulateOpen = { [weak self] in
+            self?.engine.playSingle(to: 0.0, duration: 2.2, replayIfFinished: true)
+        }
         settings.statusProvider = { [weak self] in
             guard let self else { return (angle: "--", phase: "--", capture: "未知") }
             let angle = self.engine.lastAngleDeg.map { String(format: "%.1f°", $0) } ?? "--"
@@ -419,12 +424,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.terminate(nil)
     }
 
-    /// 统一配置弹窗：设置面板浮在 1200 层、动画覆盖层 999 层，
-    /// 普通 NSAlert 是默认层级会被它们压在下面（用户根本看不到），所以这里强制置顶并激活 App。
+    /// 统一配置弹窗：设置面板 1200 层、动画覆盖层 999 层、更新进度窗 1300 层，
+    /// 普通 NSAlert 是默认层级会被它们压在下面（用户根本看不到），所以这里强制置顶到最高层，
+    /// 并加入「所有空间」，保证全屏 App 上也能弹出。
     @discardableResult
     private func present(_ alert: NSAlert) -> NSApplication.ModalResponse {
-        alert.window.level = NSWindow.Level(rawValue: 1400)
+        let window = alert.window
+        window.level = NSWindow.Level(rawValue: 2000)
+        window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        window.animationBehavior = .none
         NSApp.activate(ignoringOtherApps: true)
+        window.orderFrontRegardless()
         return alert.runModal()
     }
 

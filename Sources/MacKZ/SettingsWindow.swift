@@ -485,18 +485,24 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     @objc private func demo() { onDemo?() }
     @objc private func checkUpdate() { onCheckUpdate?() }
 
-    /// 模拟合上：滑块同步到终点，避免界面与实际进度不一致
+    /// 模拟合上：动画播完后再同步滑块，避免界面提前跳到终点
     @objc private func simulateClose() {
         onSimulateClose?()
-        manualSlider?.doubleValue = 1
-        manualValueLabel?.stringValue = "100%"
+        syncManual(after: 2.2, value: 1, text: "100%")
     }
 
     /// 模拟打开：回到完全展开
     @objc private func simulateOpen() {
         onSimulateOpen?()
-        manualSlider?.doubleValue = 0
-        manualValueLabel?.stringValue = "0%"
+        syncManual(after: 2.2, value: 0, text: "0%")
+    }
+
+    /// 延时同步手动预览滑块（delay 与模拟动画时长一致）
+    private func syncManual(after delay: Double, value: Double, text: String) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            self?.manualSlider?.doubleValue = value
+            self?.manualValueLabel?.stringValue = text
+        }
     }
 
     private func flashStatus(_ text: String) {
