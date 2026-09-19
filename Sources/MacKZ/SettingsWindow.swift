@@ -194,8 +194,8 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         qr.layer?.backgroundColor = NSColor.white.cgColor
         qr.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
-            qr.widthAnchor.constraint(equalToConstant: 168),
-            qr.heightAnchor.constraint(equalToConstant: 168)
+            qr.widthAnchor.constraint(equalToConstant: 100),
+            qr.heightAnchor.constraint(equalToConstant: 100)
         ])
         qrImage = qr
         let qrNote = NSTextField(wrappingLabelWithString: "二维码生成中…")
@@ -657,7 +657,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     /// 配对二维码图片接口：优先国内可直连的，失败再换一个公共接口
     private static let qrSources = [
         "https://api.pwmqr.com/qrcode/create/?url=",
-        "https://api.qrserver.com/v1/create-qr-code/?size=260x260&margin=0&data="
+        "https://api.qrserver.com/v1/create-qr-code/?size=200x200&margin=0&data="
     ]
 
     /// 连接码变化时刷新二维码（内容就是配对地址，含连接码；地址没变则跳过）
