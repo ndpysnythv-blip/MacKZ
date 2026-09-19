@@ -246,11 +246,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - 手机陀螺仪设置引导
 
-    /// 手机拿到权限开始报数后，Mac 这边自动把引导弹出来（本轮只弹一次，关掉就不再打扰）
+    /// 手机拿到权限开始报数后，Mac 这边自动把引导弹出来；
+    /// 已经标定过就不再打扰（标定结果会落盘，不用每次启用都走一遍引导）。
     private func maybeShowGyroSetup(now: CFTimeInterval) {
         if now - lastPhoneSample > 3 { gyroWizardShown = false }   // 手机重新开始报数 = 新一轮设置
         lastPhoneSample = now
-        guard !phoneGyroActive, !gyroWizardShown else { return }
+        guard !phoneGyro.isCalibrated, !gyroWizardShown else { return }
         gyroWizardShown = true
         showGyroSetup()
     }

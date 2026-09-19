@@ -31,6 +31,15 @@ final class PhoneGyroCalibration {
     /// 标定参考点：手机「开到最大」时的原始角
     private(set) var openRef: Double?
 
+    /// 标定结果落盘：手机贴在屏幕上时没法操作手机页面，重开 App 还要再走一遍引导太烦，
+    /// 所以「完全打开」这个基准点记住就行（这是本机运行状态，不放进 config.json）。
+    private static let storeKey = "mackzPhoneGyroOpenRef"
+
+    init() {
+        let saved = UserDefaults.standard.double(forKey: Self.storeKey)
+        if saved != 0 { openRef = saved }        // 0 表示没存过（物理上也不会是 0）
+    }
+
     /// 放稳判定的滑动窗口（存原始角）
     private var window: [Double] = []
     /// 最近一次手机上报的原始角与时间
@@ -75,11 +84,13 @@ final class PhoneGyroCalibration {
     func calibrateOpenHere() {
         guard let lastRaw else { return }
         openRef = lastRaw
+        UserDefaults.standard.set(lastRaw, forKey: Self.storeKey)
     }
 
     /// 复位标定：回到「直接用手机原始角度」
     func reset() {
         openRef = nil
+        UserDefaults.standard.removeObject(forKey: Self.storeKey)
     }
 
     /// 设置面板状态行：手机是否在报数、当前角度、是否放稳

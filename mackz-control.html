@@ -81,8 +81,8 @@
   <div class="card">
     <div class="row"><span>陀螺仪铰链模式</span><span id="gyroState" class="pill">未启用</span></div>
     <div class="big" id="gyroAngle">--°</div>
-    <div class="tip">把手机竖着贴（或用皮筋绑）在 MacBook 屏幕上、手机顶部朝屏幕顶边，点「启用陀螺仪」并允许
-    「运动与方向访问」，手机姿态角会实时换算成屏幕开合角 —— 没有铰链传感器的机型也能「抬屏即折叠」。</div>
+    <div class="tip">把手机贴（或用皮筋绑）在屏幕背面，<b>横放、竖放都可以</b>（开合角只看屏幕平面的倾角，不挑摆放方向）。
+    点「启用陀螺仪」并允许「运动与方向访问」后，手机姿态角会实时换算成屏幕开合角。若数值不跟着屏幕变化，点一下「贴法」切换后再试。</div>
     <div class="grid" style="margin-top:10px">
       <button id="gyroStart">启用陀螺仪</button>
       <button id="gyroStop" class="ghost">停止</button>
@@ -291,10 +291,12 @@
   }
   refreshMountLabel();
 
+  // 开合角 = 屏幕平面与水平面的夹角，直接用重力在手机 z 轴（屏幕法线）上的投影算：
+  //   tilt = atan2(√(gx² + gy²), gz) → 0°（屏幕朝上、合到底）… 90°（竖直）… 180°（翻平）
+  // 这样手机竖放、横放都不影响计算结果（老公式只认竖放，横着贴上去角度根本不变 → 没有动画）。
   function lidAngleFrom(g) {
-    var raw = Math.atan2(-g.y, g.z) * 180 / Math.PI;
-    raw = ((raw % 360) + 360) % 360;                     // 归一化，避开 ±180° 附近的跳变
-    var lid = gyroMount === 'back' ? 180 - raw : (raw > 180 ? 360 - raw : raw);
+    var tilt = Math.atan2(Math.sqrt(g.x * g.x + g.y * g.y), g.z) * 180 / Math.PI;
+    var lid = gyroMount === 'back' ? tilt : 180 - tilt;
     return Math.min(Math.max(lid, 0), 180);
   }
 
