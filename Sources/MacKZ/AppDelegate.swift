@@ -27,9 +27,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// 手机陀螺仪标定（放稳判定 + 两点标定，按钮都在设置面板上）
     private let phoneGyro = PhoneGyroCalibration()
     /// 是否允许手机陀螺仪驱动动画。
-    /// 默认 true：手机端点「启用陀螺仪」本身就是明确意图，一连上就该有动画；
-    /// 引导只负责把标定做准，用户点「退出手机陀螺仪」才会置 false 并交回本机传感器。
-    private var phoneGyroActive = true
+    /// 默认 false：手机点「启用陀螺仪」只是拿到权限，必须先在 Mac 端把引导走完（手机页会显示「请在 Mac 端完成操作」），
+    /// 点过「开始使用」才接管；完成过一次之后（引导记录会落盘）再连上就直接接管。
+    private var phoneGyroActive = false
     /// 引导弹窗本轮是否已经弹过（手机重新开始报数会重置）
     private var gyroWizardShown = false
     /// 设置引导弹窗
@@ -167,8 +167,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settings.onGyroCalibrateOpen = { [weak self] in self?.calibratePhoneGyro { $0.calibrateOpenHere() } }
         settings.onGyroCalibrateReset = { [weak self] in
             self?.phoneGyro.reset()
-            self?.phoneGyroActive = true
-            self?.settings?.flashMessage("手机陀螺仪标定已复位（回到手机原始角度）")
+            self?.phoneGyroActive = false        // 参数清空后需要重新走一遍引导才接管
+            self?.settings?.flashMessage("手机陀螺仪标定已复位：请点「手机陀螺仪设置引导…」重新设置")
             self?.settings?.refreshRemoteInfo()
         }
         settings.onOpenGyroSetup = { [weak self] in self?.showGyroSetup() }
@@ -230,10 +230,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func acceptPhoneHinge(_ angle: Double) {
         guard config.phoneGyro, angle.isFinite else { return }
         let now = CACurrentMediaTime()
+        // 手机重新开始报数（间隔超过 3 秒）：完成过引导就直接接管，没完成过就等 Mac 端把引导走完
+        if now - lastPhoneSample > 3 { phoneGyroActive = phoneGyro.setupDone }
         // 手机上报的是原始姿态角，这里按面板上的标定映射成铰链角
         let hinge = phoneGyro.ingest(raw: angle, at: now)
         maybeShowGyroSetup(now: now)
-        // 只有用户点过「退出手机陀螺仪」才不接管；没走引导也照常驱动，避免「屏幕动了却没动画」
+        // 引导跑完点过「开始使用」才驱动动画；没完成引导时手机页会显示「请在 Mac 端完成操作」
         guard phoneGyroActive else { return }
         if now > phoneHingeDeadline {
             status.setSensorStatus("手机陀螺仪接管中")
@@ -263,13 +265,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let window = PhoneGyroSetupWindow()
             window.onFixed = { [weak self] in self?.markPhoneFixed() }
             window.onOpenedMax = { [weak self] in self?.markScreenMaxOpen() }
-            window.onBeginCloseLearn = { [weak self] in self?.phoneGyro.beginClosedLearn() }
-            window.onFinishCloseLearn = { [weak self] in self?.phoneGyro.finishClosedLearn() }
-            window.learnDoneProvider = { [weak self] in self?.phoneGyro.hasFullRange ?? false }
+            window.onBeginPathLearn = { [weak self] in self?.phoneGyro.beginPathLearn() }
+            window.onFinishPathLearn = { [weak self] in self?.phoneGyro.finishPathLearn() }
+            window.learnDoneProvider = { [weak self] in self?.phoneGyro.hasPath ?? false }
             window.onStart = { [weak self] in self?.startPhoneGyroSession() }
             window.onRedo = { [weak self] in
                 self?.phoneGyro.reset()
-                self?.phoneGyroActive = true      // 重做期间也照常驱动，避免「屏幕动了却没动画」
+                self?.phoneGyroActive = false     // 参数清掉了，得重新走完引导才接管
                 self?.settings?.refreshRemoteInfo()
             }
             window.statusProvider = { [weak self] in self?.phoneGyro.statusText() ?? "" }
@@ -296,9 +298,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return nil
     }
 
-    /// 引导第 3 步：开始使用（把合上学习的成果收尾，此后手机陀螺仪接管铰链角度）
+    /// 引导第 3 步：开始使用（把路径学习的成果收尾，此后手机陀螺仪接管铰链角度）
     private func startPhoneGyroSession() {
-        phoneGyro.finishClosedLearn()             // 没学够行程也没关系，自动降级为单点标定
+        phoneGyro.finishPathLearn()               // 行程不够也没关系，方向按默认正向处理
         phoneGyroActive = true
         phoneHingeDeadline = CACurrentMediaTime() + 1.5
         status.setSensorStatus("手机陀螺仪接管中")
@@ -318,10 +320,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settings?.refreshRemoteInfo()
     }
 
-    /// 手机端要显示的状态：off = 已退出；setup = 还没标定（等 Mac 设置）；running = 已接管
+    /// 手机端要显示的状态：
+    /// setup = 还没走完引导（手机页提示「请在 Mac 端完成操作」）；running = 已接管；off = 用户已退出
     private var phoneGyroSessionState: String {
-        guard phoneGyroActive else { return "off" }
-        return phoneGyro.isCalibrated ? "running" : "setup"
+        if phoneGyroActive { return phoneGyro.isCalibrated ? "running" : "setup" }
+        return phoneGyro.setupDone ? "off" : "setup"
     }
 
     /// 晃动幅度文本（提示用）

@@ -118,6 +118,15 @@ final class HingeAnimationEngine {
         return config.triggerAngleDeg - progress * span
     }
 
+    /// 手机陀螺仪驱动的角度 → 进度：0°（完全合上）…130°（完全打开）全程线性对应 1…0。
+    /// 本机传感器仍按 config 的触发角模型（超过 90° 就不干预桌面），
+    /// 但手机驱动时用户要的是「一路掀到最大都有动画」，所以这里不套用触发角。
+    private static let phoneOpenAngle = 130.0
+
+    private func phoneProgress(for angle: Double) -> Double {
+        min(max((Self.phoneOpenAngle - angle) / Self.phoneOpenAngle, 0), 1)
+    }
+
     // MARK: - 主输入：角度采样（主线程调用）
 
     func update(angle: Double, timestamp: Double, fromPhone: Bool = false) {
@@ -153,7 +162,7 @@ final class HingeAnimationEngine {
         }
         smoothedAngle = value
 
-        let follow = progress(for: value)
+        let follow = fromPhone ? phoneProgress(for: value) : progress(for: value)
 
         // 累积角度变化识别“有效移动”：既能识别慢速移动，又能过滤传感器噪声
         if let prev = lastAngle { pendingDelta += value - prev }

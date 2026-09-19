@@ -317,17 +317,17 @@
     gyroState = state;
     var el = $('gyroState');
     if (state === 'running') { el.textContent = '接管中'; el.className = 'pill ok'; }
-    else if (state === 'waiting') { el.textContent = '等待 Mac 设置'; el.className = 'pill warn'; }
+    else if (state === 'waiting') { el.textContent = '请在 Mac 端完成操作'; el.className = 'pill warn'; }
     else { el.textContent = '未启用'; el.className = 'pill'; }
   }
 
   function startGyro() {
     window.addEventListener('devicemotion', onMotion, true);
     gyroOn = true;
-    // 拿到权限后先只上报角度，等 Mac 上把「固定手机 → 开到最大 → 开始使用」走完才真正接管
+    // 拿到权限后先只上报角度，Mac 端把「固定手机 → 掀到最大 → 往下合一小段 → 开始使用」走完才真正接管
     setGyroState('waiting');
-    $('gyroTip').textContent = '权限已获取。剩下的请在 Mac 上操作设置：Mac 会弹出引导 —— ① 把手机固定到屏幕上 '
-      + '② 把屏幕开到最大 ③ 点「开始使用」。设置完成前，陀螺仪不会接管折叠动画。';
+    $('gyroTip').textContent = '权限已获取，请在 Mac 端完成操作：Mac 会弹出引导 —— ① 把手机固定到屏幕上 '
+      + '② 把屏幕掀到最大 ③ 往下合一小段（不用合到底）。走完点「开始使用」才会接管折叠动画。';
   }
   function stopGyro() {
     window.removeEventListener('devicemotion', onMotion, true);

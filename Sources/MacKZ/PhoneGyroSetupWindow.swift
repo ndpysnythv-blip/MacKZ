@@ -6,7 +6,7 @@ import AppKit
 /// 比让用户自己去猜什么时候该点哪个按钮可靠得多。
 /// 流程：① 把手机固定到屏幕上（**不用合屏幕**、只确认在报数）
 ///       ② 把屏幕掀到最大并标记（= 完全打开 130°）
-///       ③ 慢慢把屏幕合到底 → 自动学习（= 完全合上 0°），两点一算就能推算全角度
+///       ③ 往下合一小段 → 实时采集路径、判断贴法方向（**不用合到底**），够了自动完成
 ///
 /// 沿用了 MacKZDialog 的窗口策略：nonactivatingPanel + 首击即中的按钮（本应用没有 Dock 图标）。
 final class PhoneGyroSetupWindow: NSObject, NSWindowDelegate {
@@ -15,10 +15,10 @@ final class PhoneGyroSetupWindow: NSObject, NSWindowDelegate {
     var onFixed: (() -> String?)?
     /// 第 2 步「我已开合到最大」：同上
     var onOpenedMax: (() -> String?)?
-    /// 进入第 3 步（合上学习）时调用
-    var onBeginCloseLearn: (() -> Void)?
-    /// 第 3 步手动收尾（自动学习已经成功时会提前跳到完成页）
-    var onFinishCloseLearn: (() -> Void)?
+    /// 进入第 3 步（路径学习）时调用
+    var onBeginPathLearn: (() -> Void)?
+    /// 第 3 步手动收尾（路径学习已经成功时会自动跳到完成页）
+    var onFinishPathLearn: (() -> Void)?
     /// 「开始使用」
     var onStart: (() -> Void)?
     /// 「重新设置」：清掉已标定参数重来
@@ -27,7 +27,7 @@ final class PhoneGyroSetupWindow: NSObject, NSWindowDelegate {
     var statusProvider: (() -> String)?
     /// 标定参数说明（完成那一步显示）
     var mappingProvider: (() -> String)?
-    /// 合上学习是否已经自动完成（完成就自动跳到「设置完成」页）
+    /// 路径学习是否已经自动完成（完成就自动跳到「设置完成」页）
     var learnDoneProvider: (() -> Bool)?
 
     /// 同时存活的弹窗（非模态窗口没有持有者，得自己强引用住）
@@ -165,10 +165,10 @@ final class PhoneGyroSetupWindow: NSObject, NSWindowDelegate {
         case 1:
             if let problem = onOpenedMax?() { hint = problem } else {
                 step = 2
-                onBeginCloseLearn?()                 // 进入合上学习
+                onBeginPathLearn?()                  // 进入路径学习
             }
         case 2:
-            onFinishCloseLearn?()                    // 用户自己点了「已完成合上」
+            onFinishPathLearn?()                     // 用户自己点了「已完成（跳过）」
             step = 3
         default:
             onStart?()
@@ -191,7 +191,7 @@ final class PhoneGyroSetupWindow: NSObject, NSWindowDelegate {
     /// 取消：只关窗，不动已标定的参数
     @objc private func cancel() { close() }
 
-    /// 刷新实时状态行；合上学习自动成功时直接跳到完成页
+    /// 刷新实时状态行；路径学习自动成功时直接跳到完成页
     private func refresh() {
         statusLabel.stringValue = statusProvider?() ?? ""
         if step == 2, learnDoneProvider?() == true {
@@ -218,10 +218,10 @@ final class PhoneGyroSetupWindow: NSObject, NSWindowDelegate {
             illustration.setMode(.opening)
         case 2:
             stepLabel.stringValue = "第 3 步 / 共 3 步"
-            titleLabel.stringValue = "请把屏幕慢慢合到底"
-            detailLabel.stringValue = "像动画这样慢慢合，合到最底停一下。\n"
-                + "合到底后屏幕会黑、点不到按钮，所以**不用点任何东西**，程序会自动记下「完全合上」。"
-            primaryButton.title = "已完成合上"
+            titleLabel.stringValue = "请把屏幕往下合一小段（不用合到底）"
+            detailLabel.stringValue = "慢慢往下合一点就行 —— 程序在**实时采集合上的路径**，用来看手机贴得正不正。\n"
+                + "合过 40° 以上会自动跳到下一步，**不用点按钮、更不用合到底**（合到底屏幕会黑）。"
+            primaryButton.title = "已完成（跳过）"
             illustration.setMode(.closing)
         default:
             stepLabel.stringValue = "设置完成"
