@@ -29,6 +29,9 @@ final class PhoneGyroCalibration {
     private static let steadyThreshold = 3.0
     /// 超过该秒数没有手机数据就算「没在收到数据」
     private static let staleAfter: CFTimeInterval = 1.5
+    /// 两点标定的最小跨度（原始角）：低于它说明第 1 步时屏幕没合上，
+    /// 两点缩放会把角度放大到离谱（表现为「一动屏幕动画就闪完」），所以按无效处理
+    private static let minSpan = 15.0
 
     /// 标定参考点（手机原始角）
     private(set) var closedRef: Double?
@@ -42,6 +45,15 @@ final class PhoneGyroCalibration {
 
     /// 是否标定过
     var isCalibrated: Bool { closedRef != nil || openRef != nil }
+
+    /// 最近一次收到的原始角
+    var lastSample: Double? { lastRaw }
+
+    /// 两点标定是否有效（跨度够大，缩放才可信）
+    var hasValidSpan: Bool {
+        guard let closed = closedRef, let open = openRef else { return false }
+        return open - closed >= Self.minSpan
+    }
 
     /// 收到一次手机上报：记入窗口并返回映射后的铰链角（主线程调用）
     func ingest(raw: Double, at now: CFTimeInterval) -> Double {
@@ -119,6 +131,9 @@ final class PhoneGyroCalibration {
         case (nil, let open?):
             return String(format: "标定：完全打开 = %.1f°（整体平移）", open)
         case (let closed?, let open?):
+            guard hasValidSpan else {
+                return String(format: "标定：两点只差 %.1f°，跨度太小已按单点处理 —— 建议重做一次引导", open - closed)
+            }
             return String(format: "标定：完全合上 %.1f° → 完全打开 %.1f°（映射到 0~%.0f°）",
                           closed, open, Self.openAngle)
         }
@@ -128,7 +143,7 @@ final class PhoneGyroCalibration {
     private func mapped(_ raw: Double) -> Double {
         var value = raw
         switch (closedRef, openRef) {
-        case (let closed?, let open?) where abs(open - closed) > 0.0001:
+        case (let closed?, let open?) where open - closed >= Self.minSpan:
             value = (raw - closed) / (open - closed) * Self.openAngle
         case (let closed?, _):
             value = raw - closed

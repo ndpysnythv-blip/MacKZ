@@ -26,8 +26,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var phoneHingeWatchdog: Timer?
     /// 手机陀螺仪标定（放稳判定 + 两点标定，按钮都在设置面板上）
     private let phoneGyro = PhoneGyroCalibration()
-    /// 手机陀螺仪是否已「开始使用」：引导走完之前只收数据用于标定，不驱动动画
-    private var phoneGyroActive = false
+    /// 是否允许手机陀螺仪驱动动画。
+    /// 默认 true：手机端点「启用陀螺仪」本身就是明确意图，一连上就该有动画；
+    /// 引导只负责把标定做准，用户点「退出手机陀螺仪」才会置 false 并交回本机传感器。
+    private var phoneGyroActive = true
     /// 引导弹窗本轮是否已经弹过（手机重新开始报数会重置）
     private var gyroWizardShown = false
     /// 设置引导弹窗
@@ -143,7 +145,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         relay.stateProvider = { [weak self] in
             guard let self else { return (progress: 0, angle: nil, phoneGyro: "setup") }
             return (progress: self.engine.progress, angle: self.engine.lastAngleDeg,
-                    phoneGyro: self.phoneGyroActive ? "running" : "setup")
+                    phoneGyro: self.phoneGyroSessionState)
         }
         settings.remoteInfoProvider = { [weak self] in
             guard let self else {
@@ -166,11 +168,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settings.onGyroCalibrateOpen = { [weak self] in self?.calibratePhoneGyro { $0.calibrateOpenHere() } }
         settings.onGyroCalibrateReset = { [weak self] in
             self?.phoneGyro.reset()
-            self?.phoneGyroActive = false
+            self?.phoneGyroActive = true
             self?.settings?.flashMessage("手机陀螺仪标定已复位（回到手机原始角度）")
             self?.settings?.refreshRemoteInfo()
         }
         settings.onOpenGyroSetup = { [weak self] in self?.showGyroSetup() }
+        settings.onStopGyro = { [weak self] in self?.stopPhoneGyroSession() }
 
         // 按配置启停手机遥控
         if config.remoteControl {
@@ -231,7 +234,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 手机上报的是原始姿态角，这里按面板上的标定映射成铰链角
         let hinge = phoneGyro.ingest(raw: angle, at: now)
         maybeShowGyroSetup(now: now)
-        // 引导没走完（还没点「开始使用」）之前，只收数据用于标定，不让手机驱动动画
+        // 只有用户点过「退出手机陀螺仪」才不接管；没走引导也照常驱动，避免「屏幕动了却没动画」
         guard phoneGyroActive else { return }
         if now > phoneHingeDeadline {
             status.setSensorStatus("手机陀螺仪接管中")
@@ -262,7 +265,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             window.onStart = { [weak self] in self?.startPhoneGyroSession() }
             window.onRedo = { [weak self] in
                 self?.phoneGyro.reset()
-                self?.phoneGyroActive = false
+                self?.phoneGyroActive = true      // 重做期间也照常驱动，避免「屏幕动了却没动画」
                 self?.settings?.refreshRemoteInfo()
             }
             window.statusProvider = { [weak self] in self?.phoneGyro.statusText() ?? "" }
@@ -286,6 +289,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func markScreenMaxOpen() -> String? {
         guard phoneGyro.hasFreshData else { return "手机上没在上报角度了：检查它是否还在控制页前台" }
         guard phoneGyro.isSteady else { return "手机还在晃（\(gyroWobbleText)）：等屏幕停稳再点一次" }
+        guard let closed = phoneGyro.closedRef, let now = phoneGyro.lastSample else {
+            return "第 1 步没做成：请点「重新设置」，在屏幕合上的状态下点「我已固定好」"
+        }
+        // 两点跨度太小 → 缩放会把角度放大到离谱（画面一开合就闪完），直接拦下让用户重做
+        let span = now - closed
+        guard span >= 15 else {
+            return String(format: "两次位置只差了 %.1f°：第 1 步时屏幕要是合上的，第 2 步才掀到最大。请点「重新设置」重来", span)
+        }
         phoneGyro.calibrateOpenHere()
         return nil
     }
@@ -298,6 +309,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSLog("[MacKZ] 手机陀螺仪设置完成，开始接管铰链角度")
         settings?.flashMessage("手机陀螺仪已开始使用")
         settings?.refreshRemoteInfo()
+    }
+
+    /// 退出手机陀螺仪：立刻交回本机铰链传感器（手机端会显示「已退出」）
+    private func stopPhoneGyroSession() {
+        phoneGyroActive = false
+        phoneHingeDeadline = 0
+        status.setSensorStatus(sensor.isRunning ? "运行中（Lid Angle Sensor）" : "已停用")
+        NSLog("[MacKZ] 已退出手机陀螺仪，交回本机传感器")
+        settings?.flashMessage("已退出手机陀螺仪，交回本机传感器")
+        settings?.refreshRemoteInfo()
+    }
+
+    /// 手机端要显示的状态：off = 已退出；setup = 还没标定（等 Mac 设置）；running = 已接管
+    private var phoneGyroSessionState: String {
+        guard phoneGyroActive else { return "off" }
+        return phoneGyro.isCalibrated ? "running" : "setup"
     }
 
     /// 晃动幅度文本（提示用）

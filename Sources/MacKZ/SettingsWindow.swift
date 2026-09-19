@@ -50,6 +50,8 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     var onGyroCalibrateReset: (() -> Void)?
     /// 打开「手机陀螺仪设置引导」弹窗（固定手机 → 开到最大 → 开始使用）
     var onOpenGyroSetup: (() -> Void)?
+    /// 退出手机陀螺仪（立刻交回本机传感器）
+    var onStopGyro: (() -> Void)?
     /// 实时状态拉取：角度 / 阶段 / 屏幕录制权限
     var statusProvider: (() -> (angle: String, phase: String, capture: String))?
 
@@ -275,7 +277,8 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             switchRow("允许手机陀螺仪接管角度", \.phoneGyro),
             makeRow(views: [gyroState]),
             makeRow(views: [gyroMap]),
-            makeRow(views: [makeButton("手机陀螺仪设置引导…", #selector(openGyroSetup))]),
+            makeRow(views: [makeButton("手机陀螺仪设置引导…", #selector(openGyroSetup)),
+                            makeButton("退出手机陀螺仪", #selector(stopGyroSession))]),
             makeRow(views: [gyroZero, gyroOpen, makeButton("复位标定", #selector(gyroMarkReset))]),
             remoteHelp
         ]))
@@ -773,6 +776,9 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
 
     /// 打开手机陀螺仪设置引导
     @objc private func openGyroSetup() { onOpenGyroSetup?() }
+
+    /// 退出手机陀螺仪：交回本机铰链传感器
+    @objc private func stopGyroSession() { onStopGyro?() }
 
     /// 给面板底部状态行写一句提示（标定被拒、标定完成等）
     func flashMessage(_ text: String) { flashStatus(text) }

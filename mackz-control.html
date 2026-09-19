@@ -225,12 +225,18 @@
         try { obj = JSON.parse(text); } catch (e) { return; }
         if (typeof obj.p === 'number') { applyProgress(obj.p); }
         if (typeof obj.g === 'number') { $('lid').textContent = obj.g.toFixed(1) + '°'; }
-        // Mac 端走完引导并点了「开始使用」→ 本页从「等待 Mac 设置」切到「接管中」
+        // Mac 端的状态：running = 已接管；setup = 等 Mac 设置；off = 用户已退出手机陀螺仪
         if (obj.s === 'running') {
           if (gyroOn && gyroState !== 'running') {
             setGyroState('running');
             $('gyroTip').textContent = 'Mac 已开始使用手机陀螺仪：掀合屏幕就能驱动折叠动画。'
               + '切到后台或锁屏会暂停上报，Mac 会自动交回自己身上的铰链传感器。';
+          }
+        } else if (obj.s === 'off') {
+          if (gyroOn && gyroState !== 'off') {
+            setGyroState('off');
+            $('gyroTip').textContent = 'Mac 上点了「退出手机陀螺仪」：本页已停止接管，折叠动画交回 Mac 自己的传感器。'
+              + '想重新用手机驱动，请在 Mac 设置面板点「手机陀螺仪设置引导…」再走一遍。';
           }
         } else if (gyroOn && gyroState === 'running') {
           setGyroState('waiting');               // Mac 那边重新设置/复位了
