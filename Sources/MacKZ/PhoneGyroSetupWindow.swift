@@ -186,14 +186,14 @@ final class PhoneGyroSetupWindow: NSObject, NSWindowDelegate {
             stepLabel.stringValue = "第 1 步 / 共 2 步"
             titleLabel.stringValue = "请先把手机固定在 Mac 屏幕上"
             detailLabel.stringValue = "先把屏幕合到底，再把手机竖着贴（或用皮筋绑）在屏幕背面、手机顶部朝向屏幕顶边。\n"
-                + "贴稳后点下面的按钮 —— 这一步会把当前位置记成「完全合上」。"
+                + "贴稳后点下面的按钮 —— 这一步不做标定，只确认手机已经在报数。"
             primaryButton.title = "我已固定好"
             statusLabel.isHidden = false
         case 1:
             stepLabel.stringValue = "第 2 步 / 共 2 步"
             titleLabel.stringValue = "请将 Mac 屏幕开合到最大"
             detailLabel.stringValue = "慢慢把屏幕掀到最大角度后停住，等手机放稳（下面的状态变成「已放稳」）。\n"
-                + "这一步会把当前位置记成「完全打开」。"
+                + "这一步会把当前位置记成「完全打开」，合上端由 MacBook 固定的开合尺度推算。"
             primaryButton.title = "我已开合到最大"
             statusLabel.isHidden = false
         default:

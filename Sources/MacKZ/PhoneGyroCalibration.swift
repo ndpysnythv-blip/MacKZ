@@ -11,17 +11,15 @@ import QuartzCore
 /// - 0° = 完全合上（折叠进度 1），角度越大越开，竖直约 90°，开到顶约 135°；
 /// - 手机上报的是「原始姿态角」，手机端不做零点偏移，偏移一律在这里做。
 ///
-/// 标定模型（两个参考点都可以单独标，也可以都标）：
-/// - 只标「完全合上」：`mapped = raw - 合上参考`（整体平移）
-/// - 只标「完全打开」：`mapped = raw - (打开参考 - 135)`（整体平移）
-/// - 两点都标：`mapped = (raw - 合上参考) / (打开参考 - 合上参考) * 135`（平移 + 缩放）
-/// - 都没标：原样透传
-/// 结果统一夹到 0~180。
+/// 标定模型：**只标「完全打开」一个点**。
+/// 合上屏幕的画面是全黑的、还要贴着手机，根本没法在那里点按钮；而 MacBook 的开合尺度是固定的
+/// （开到顶约 135°，合到底约 0°），所以只要知道「开到最大时的原始角」，整条曲线平移一下即可：
+/// `mapped = raw - (打开参考 - 135)`，未标定时原样透传。结果夹到 0~180。
 ///
 /// 主线程串行使用，不加锁。
 final class PhoneGyroCalibration {
 
-    /// 「完全打开」对应的角度：MacBook 屏幕开到顶约 135°，两点标定时把开屏点映射到这里
+    /// 「完全打开」对应的角度：MacBook 屏幕开到顶约 135°
     private static let openAngle = 135.0
     /// 放稳判定窗口：约 1 秒（手机上报限流到 20Hz）
     private static let windowSize = 20
@@ -29,12 +27,8 @@ final class PhoneGyroCalibration {
     private static let steadyThreshold = 3.0
     /// 超过该秒数没有手机数据就算「没在收到数据」
     private static let staleAfter: CFTimeInterval = 1.5
-    /// 两点标定的最小跨度（原始角）：低于它说明第 1 步时屏幕没合上，
-    /// 两点缩放会把角度放大到离谱（表现为「一动屏幕动画就闪完」），所以按无效处理
-    private static let minSpan = 15.0
 
-    /// 标定参考点（手机原始角）
-    private(set) var closedRef: Double?
+    /// 标定参考点：手机「开到最大」时的原始角
     private(set) var openRef: Double?
 
     /// 放稳判定的滑动窗口（存原始角）
@@ -44,16 +38,7 @@ final class PhoneGyroCalibration {
     private var lastStamp: CFTimeInterval = 0
 
     /// 是否标定过
-    var isCalibrated: Bool { closedRef != nil || openRef != nil }
-
-    /// 最近一次收到的原始角
-    var lastSample: Double? { lastRaw }
-
-    /// 两点标定是否有效（跨度够大，缩放才可信）
-    var hasValidSpan: Bool {
-        guard let closed = closedRef, let open = openRef else { return false }
-        return open - closed >= Self.minSpan
-    }
+    var isCalibrated: Bool { openRef != nil }
 
     /// 收到一次手机上报：记入窗口并返回映射后的铰链角（主线程调用）
     func ingest(raw: Double, at now: CFTimeInterval) -> Double {
@@ -85,24 +70,15 @@ final class PhoneGyroCalibration {
     /// 是否可以标定：手机放稳了才让标，晃着标会把基准点标歪
     var canCalibrate: Bool { hasFreshData && isSteady }
 
-    /// 把手机「当前所在的位置」标定为完全合上（0°）
-    func calibrateClosedHere() {
-        guard let lastRaw else { return }
-        closedRef = lastRaw
-        // 两点都标时要求打开点大于合上点，标反了就把另一个点丢掉，避免出现负缩放
-        if let open = openRef, open <= lastRaw { openRef = nil }
-    }
-
-    /// 把手机「当前所在的位置」标定为完全打开（135°）
+    /// 把手机「当前所在的位置」标定为完全打开（135°）：
+    /// 合上端不去标（合上时屏幕全黑、点不了按钮），按 MacBook 固定的开合尺度推算
     func calibrateOpenHere() {
         guard let lastRaw else { return }
         openRef = lastRaw
-        if let closed = closedRef, lastRaw <= closed { closedRef = nil }
     }
 
     /// 复位标定：回到「直接用手机原始角度」
     func reset() {
-        closedRef = nil
         openRef = nil
     }
 
@@ -123,35 +99,13 @@ final class PhoneGyroCalibration {
 
     /// 设置面板第二行：当前标定情况
     func mappingText() -> String {
-        switch (closedRef, openRef) {
-        case (nil, nil):
-            return "标定：未标定（直接采用手机原始角度）"
-        case (let closed?, nil):
-            return String(format: "标定：完全合上 = %.1f°（整体平移）", closed)
-        case (nil, let open?):
-            return String(format: "标定：完全打开 = %.1f°（整体平移）", open)
-        case (let closed?, let open?):
-            guard hasValidSpan else {
-                return String(format: "标定：两点只差 %.1f°，跨度太小已按单点处理 —— 建议重做一次引导", open - closed)
-            }
-            return String(format: "标定：完全合上 %.1f° → 完全打开 %.1f°（映射到 0~%.0f°）",
-                          closed, open, Self.openAngle)
-        }
+        guard let open = openRef else { return "标定：未标定（直接采用手机原始角度）" }
+        return String(format: "标定：完全打开 = %.1f°（其余角度按开合尺度推算）", open)
     }
 
-    /// 原始角 → 铰链角
+    /// 原始角 → 铰链角：只做整体平移，让「打开参考点」落在 135°
     private func mapped(_ raw: Double) -> Double {
-        var value = raw
-        switch (closedRef, openRef) {
-        case (let closed?, let open?) where open - closed >= Self.minSpan:
-            value = (raw - closed) / (open - closed) * Self.openAngle
-        case (let closed?, _):
-            value = raw - closed
-        case (nil, let open?):
-            value = raw - (open - Self.openAngle)
-        default:
-            break
-        }
-        return min(max(value, 0), 180)
+        guard let open = openRef else { return min(max(raw, 0), 180) }
+        return min(max(raw - (open - Self.openAngle), 0), 180)
     }
 }

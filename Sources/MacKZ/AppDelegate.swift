@@ -164,7 +164,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return (status: self.phoneGyro.statusText(), mapping: self.phoneGyro.mappingText(),
                     canCalibrate: self.phoneGyro.canCalibrate)
         }
-        settings.onGyroCalibrateZero = { [weak self] in self?.calibratePhoneGyro { $0.calibrateClosedHere() } }
         settings.onGyroCalibrateOpen = { [weak self] in self?.calibratePhoneGyro { $0.calibrateOpenHere() } }
         settings.onGyroCalibrateReset = { [weak self] in
             self?.phoneGyro.reset()
@@ -275,28 +274,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         gyroSetup?.show()
     }
 
-    /// 引导第 1 步：把手机当前位置记成「完全合上」（返回 nil 表示通过，否则是拦下的原因）
+    /// 引导第 1 步：只确认手机贴稳并已在报数（不做任何标定 —— 合上端不标）
     private func markPhoneFixed() -> String? {
         guard phoneGyro.hasFreshData else {
             return "还没收到手机角度：先在手机控制页点「启用陀螺仪」并允许「运动与方向访问」"
         }
         guard phoneGyro.isSteady else { return "手机还在晃（\(gyroWobbleText)）：贴稳一点再点一次" }
-        phoneGyro.calibrateClosedHere()
         return nil
     }
 
-    /// 引导第 2 步：把手机当前位置记成「完全打开」
+    /// 引导第 2 步：把手机当前位置记成「完全打开」——唯一的标定点，合上端按开合尺度推算
     private func markScreenMaxOpen() -> String? {
         guard phoneGyro.hasFreshData else { return "手机上没在上报角度了：检查它是否还在控制页前台" }
         guard phoneGyro.isSteady else { return "手机还在晃（\(gyroWobbleText)）：等屏幕停稳再点一次" }
-        guard let closed = phoneGyro.closedRef, let now = phoneGyro.lastSample else {
-            return "第 1 步没做成：请点「重新设置」，在屏幕合上的状态下点「我已固定好」"
-        }
-        // 两点跨度太小 → 缩放会把角度放大到离谱（画面一开合就闪完），直接拦下让用户重做
-        let span = now - closed
-        guard span >= 15 else {
-            return String(format: "两次位置只差了 %.1f°：第 1 步时屏幕要是合上的，第 2 步才掀到最大。请点「重新设置」重来", span)
-        }
         phoneGyro.calibrateOpenHere()
         return nil
     }
@@ -311,13 +301,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settings?.refreshRemoteInfo()
     }
 
-    /// 退出手机陀螺仪：立刻交回本机铰链传感器（手机端会显示「已退出」）
+    /// 退出手机陀螺仪：立刻交回本机铰链传感器，并把画面复位（收掉折叠覆盖层）
     private func stopPhoneGyroSession() {
         phoneGyroActive = false
         phoneHingeDeadline = 0
+        engine.reset()                            // 画面复位：折叠覆盖层收起，回到正常桌面
         status.setSensorStatus(sensor.isRunning ? "运行中（Lid Angle Sensor）" : "已停用")
         NSLog("[MacKZ] 已退出手机陀螺仪，交回本机传感器")
-        settings?.flashMessage("已退出手机陀螺仪，交回本机传感器")
+        settings?.flashMessage("已退出手机陀螺仪：画面已复位，交回本机传感器")
         settings?.refreshRemoteInfo()
     }
 

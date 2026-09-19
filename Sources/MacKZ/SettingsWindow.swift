@@ -42,9 +42,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     var onOpenHomepage: (() -> Void)?
     /// 手机陀螺仪标定状态：状态文本 / 标定说明 / 是否允许标定（手机放稳了才允许）
     var phoneGyroProvider: (() -> (status: String, mapping: String, canCalibrate: Bool))?
-    /// 「当前位置＝完全合上」（0°）
-    var onGyroCalibrateZero: (() -> Void)?
-    /// 「当前位置＝完全打开」（135°）
+    /// 「当前位置＝完全打开」（0° 那端由 MacBook 固定开合尺度推算，不需要标）
     var onGyroCalibrateOpen: (() -> Void)?
     /// 复位标定
     var onGyroCalibrateReset: (() -> Void)?
@@ -82,7 +80,6 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     /// 手机陀螺仪：当前标定情况显示
     private var gyroMappingLabel: NSTextField?
     /// 两个标定按钮：手机没放稳时禁用
-    private var gyroZeroButton: NSButton?
     private var gyroOpenButton: NSButton?
     private var timer: Timer?
     /// NSControl.target 是弱引用，这里强引用住所有回调持有者，防止被释放
@@ -242,7 +239,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             + "在手机控制页点「启用陀螺仪」并允许「运动与方向访问」，手机姿态角就会实时换算成屏幕开合角，"
             + "替代本机铰链传感器 —— 适合没有 Lid Angle Sensor 的机型。\n"
             + "标定推荐直接点「手机陀螺仪设置引导…」，跟着弹窗走两步（先把手机固定在屏幕上 → 再把屏幕开到最大）即可；"
-            + "也可以在上面看到手机放稳后，手动点「当前位置＝完全合上 / 完全打开」，点错了用「复位标定」退回手机原始角度。\n"
+            + "只标「开到最大」这一点就够：合上时屏幕全黑点不了按钮，0° 那端由 MacBook 固定的开合尺度推算。\n"
             + "手机锁屏或切到后台会自动交回本机传感器；官网是 https 页面，符合 iOS 对「安全上下文」的要求，所以陀螺仪能正常读数。")
         gyroTip.font = .systemFont(ofSize: 11)
         gyroTip.textColor = .tertiaryLabelColor
@@ -258,9 +255,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         gyroMap.textColor = .tertiaryLabelColor
         gyroMap.lineBreakMode = .byTruncatingTail
         gyroMappingLabel = gyroMap
-        let gyroZero = makeButton("当前位置＝完全合上", #selector(gyroMarkClosed))
         let gyroOpen = makeButton("当前位置＝完全打开", #selector(gyroMarkOpen))
-        gyroZeroButton = gyroZero
         gyroOpenButton = gyroOpen
 
         // 这两段说明很长，默认折叠，需要时点标题展开，避免把面板撑得过长
@@ -279,7 +274,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             makeRow(views: [gyroMap]),
             makeRow(views: [makeButton("手机陀螺仪设置引导…", #selector(openGyroSetup)),
                             makeButton("退出手机陀螺仪", #selector(stopGyroSession))]),
-            makeRow(views: [gyroZero, gyroOpen, makeButton("复位标定", #selector(gyroMarkReset))]),
+            makeRow(views: [gyroOpen, makeButton("复位标定", #selector(gyroMarkReset))]),
             remoteHelp
         ]))
 
@@ -605,7 +600,6 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         gyroStatusLabel?.stringValue = info.status
         gyroStatusLabel?.textColor = info.canCalibrate ? .systemGreen : .secondaryLabelColor
         gyroMappingLabel?.stringValue = info.mapping
-        gyroZeroButton?.isEnabled = info.canCalibrate
         gyroOpenButton?.isEnabled = info.canCalibrate
     }
 
@@ -764,9 +758,6 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     @objc private func refreshRemoteURL() { onRefreshRemote?() }
 
     // MARK: - 手机陀螺仪标定
-
-    /// 「当前位置＝完全合上」
-    @objc private func gyroMarkClosed() { onGyroCalibrateZero?() }
 
     /// 「当前位置＝完全打开」
     @objc private func gyroMarkOpen() { onGyroCalibrateOpen?() }
