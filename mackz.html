@@ -262,8 +262,9 @@
     <section class="card" id="remote">
       <h2>手机遥控配对</h2>
       <p class="lead">
-        手机打开本页、配对成功后，就能在<span class="hl">这个网页上</span>直接遥控 MacBook 的折叠动画：
-        合上 / 打开 / 播放一次开合 / 拖动进度，还能把手机贴在屏幕上用<span class="hl">陀螺仪</span>当铰链传感器。
+        手机打开本页、配对成功后，页面上只会留一个<span class="hl">「进入控制中心」</span>按钮；
+        点进去就是那套遥控界面：合上 / 打开 / 播放一次开合 / 拖动进度，
+        还能把手机贴在屏幕上用<span class="hl">陀螺仪</span>当铰链传感器。
       </p>
 
       <!-- 未配对 -->
@@ -281,14 +282,27 @@
         </p>
       </div>
 
-      <!-- 已配对 -->
+      <!-- 已配对：这一屏只留「进入控制中心」一个入口 -->
       <div id="mzPaired" hidden>
         <div class="mz-row"><span>连接码</span><span class="mz-pill" id="mzPill">连接中…</span></div>
         <div class="mz-code" id="mzCodeBig"></div>
         <div class="mz-qrbox"><img id="mzQr" alt="配对二维码"></div>
         <p class="note" style="text-align:center">手机扫这个二维码 → 打开本页并自动配对</p>
 
-        <div class="mz-sep"></div>
+        <div class="mz-actions" style="margin-top:18px">
+          <button class="btn primary" id="mzEnter" type="button">进入控制中心</button>
+        </div>
+        <div class="mz-actions" style="margin-top:10px">
+          <button class="btn ghost" id="mzUnpair" type="button">换一个连接码</button>
+        </div>
+      </div>
+
+      <!-- 控制中心：配对后点「进入控制中心」进来，就是原来那套遥控界面 -->
+      <div id="mzCenter" hidden>
+        <div class="mz-row">
+          <span>控制中心 · <b id="mzCenterCode"></b></span>
+          <span class="mz-pill" id="mzPill2">连接中…</span>
+        </div>
         <div class="mz-state">
           <span>折叠进度 <b id="mzProgress">--</b></span>
           <span>铰链角度 <b id="mzAngle">--</b></span>
@@ -316,7 +330,7 @@
         </p>
 
         <div class="mz-actions" style="margin-top:18px">
-          <button class="btn ghost" id="mzUnpair" type="button">换一个连接码</button>
+          <button class="btn ghost" id="mzBack" type="button">← 返回配对页</button>
         </div>
       </div>
     </section>
@@ -561,9 +575,14 @@
   function downTopic() { return 'mackz/' + code + '/down'; }
 
   function setPill(text, cls) {
-    var el = $('mzPill');
-    el.textContent = text;
-    el.className = 'mz-pill' + (cls ? ' ' + cls : '');
+    // 配对页与控制中心各有一个状态标签，两处同步更新
+    var ids = ['mzPill', 'mzPill2'], i, el;
+    for (i = 0; i < ids.length; i++) {
+      el = $(ids[i]);
+      if (!el) { continue; }
+      el.textContent = text;
+      el.className = 'mz-pill' + (cls ? ' ' + cls : '');
+    }
   }
 
   // 二维码内容就是本页地址（带上连接码），手机扫一下即可打开本页并自动配对
@@ -606,26 +625,54 @@
     if (Date.now() > sliderLock) { $('mzSlider').value = Math.round(p * 100); }
   }
 
+  // 配对区块在长页面靠下的位置，配对/进控制中心后直接滚过去，
+  // 避免「一进官网还停在首页顶部、看不到配对结果」
+  function scrollToRemote() {
+    var el = $('remote');
+    if (el && el.scrollIntoView) { el.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
+  }
+
   function showPaired(value) {
     code = value;
     $('mzCodeBig').textContent = code;
+    $('mzCenterCode').textContent = code;
     $('mzSetup').hidden = true;
     $('mzPaired').hidden = false;
+    $('mzCenter').hidden = true;
     try { history.replaceState(null, '', '#c=' + code); } catch (e) {}
     renderQR();
     connect();
+    scrollToRemote();
+  }
+
+  // 「进入控制中心」：配对页只留这一个入口，点进来才是那套遥控界面
+  function enterCenter() {
+    $('mzPaired').hidden = true;
+    $('mzCenter').hidden = false;
+    scrollToRemote();
+  }
+
+  // 返回配对页（连接保持不断开）
+  function backToPair() {
+    $('mzCenter').hidden = true;
+    $('mzPaired').hidden = false;
+    scrollToRemote();
   }
 
   function unpair() {
     if (client) { client.close(); client = null; }
     stopGyro();
     $('mzPaired').hidden = true;
+    $('mzCenter').hidden = true;
     $('mzSetup').hidden = false;
     $('mzErr').textContent = '';
     $('mzCode').value = '';
     try { history.replaceState(null, '', location.pathname); } catch (e) {}
     $('mzCode').focus();
   }
+
+  $('mzEnter').onclick = enterCenter;
+  $('mzBack').onclick = backToPair;
 
   $('mzPair').onclick = function () {
     var v = normalize($('mzCode').value);

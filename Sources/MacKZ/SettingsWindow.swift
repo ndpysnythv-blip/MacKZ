@@ -59,6 +59,12 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     private var remoteLabel: NSTextField?
     /// 局域网直连地址（备用路径）显示
     private var remoteLocalLabel: NSTextField?
+    /// 配对二维码：直接显示在面板里，不用再去官网页面看
+    private var qrImage: NSImageView?
+    /// 二维码说明 / 加载失败提示
+    private var qrHint: NSTextField?
+    /// 当前二维码对应的配对地址，地址没变就不重复请求
+    private var qrLink = ""
     private var timer: Timer?
     /// NSControl.target 是弱引用，这里强引用住所有回调持有者，防止被释放
     private var handlers: [NSObject] = []
@@ -179,11 +185,30 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         remoteLocalState.textColor = .tertiaryLabelColor
         remoteLocalState.lineBreakMode = .byTruncatingMiddle
         remoteLocalLabel = remoteLocalState
+
+        // 配对二维码：手机扫它即可打开配对页，不必再自己去官网找
+        let qr = NSImageView()
+        qr.imageScaling = .scaleProportionallyUpOrDown
+        qr.wantsLayer = true
+        qr.layer?.cornerRadius = 8
+        qr.layer?.backgroundColor = NSColor.white.cgColor
+        qr.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            qr.widthAnchor.constraint(equalToConstant: 168),
+            qr.heightAnchor.constraint(equalToConstant: 168)
+        ])
+        qrImage = qr
+        let qrNote = NSTextField(wrappingLabelWithString: "二维码生成中…")
+        qrNote.font = .systemFont(ofSize: 11)
+        qrNote.textColor = .tertiaryLabelColor
+        qrNote.preferredMaxLayoutWidth = 240
+        qrHint = qrNote
+
         let remoteTip = NSTextField(wrappingLabelWithString:
             "用法：\n"
-            + "① Mac 上点「打开配对页」，浏览器进入 kdxzhx.top/mackz 的「手机遥控配对」区块；\n"
-            + "② 手机打开同一个网址（或直接扫页面上的二维码），输入上面的连接码配对；\n"
-            + "③ 配对后手机就在官网页面上操作：合上 / 打开 / 播放一次 / 拖进度，陀螺仪模式也能用。\n\n"
+            + "① 手机扫面板上的二维码（或在 Mac 上点「打开配对页」），直接打开 kdxzhx.top/mackz 的配对区块；\n"
+            + "② 配对成功那一屏只留一个「进入控制中心」按钮，点它才进入遥控界面；\n"
+            + "③ 控制中心里可以：合上 / 打开 / 播放一次开合 / 拖进度，陀螺仪模式也能用。\n\n"
             + "为什么走官网：iOS 只在 https 页面才开放陀螺仪，而 https 页面被浏览器禁止直接访问局域网的 http 地址。\n"
             + "所以 Mac 主动连一个公共中转（只传指令和角度数字，房间号就是这次随机生成的连接码），"
             + "手机在官网页面上通过中转和 Mac 对话 —— 手机和 Mac 甚至不必在同一个 Wi-Fi。\n\n"
@@ -205,9 +230,10 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         // 这两段说明很长，默认折叠，需要时点标题展开，避免把面板撑得过长
         let remoteHelp = collapsibleBox(title: "更多介绍", rows: [remoteTip, gyroTip])
 
-        stack.addArrangedSubview(sectionBox(title: "手机遥控（手机在官网上操作）", rows: [
+        stack.addArrangedSubview(sectionBox(title: "手机遥控（手机扫码配对）", rows: [
             makeRow(views: [remoteState]),
             makeRow(views: [remoteLocalState]),
+            makeRow(title: "配对二维码", views: [qr, qrNote]),
             makeRow(views: [makeButton("复制连接码", #selector(copyRemoteURL)),
                             makeButton("打开配对页", #selector(openPairPage)),
                             makeButton("刷新连接码", #selector(refreshRemoteURL))]),
@@ -625,6 +651,47 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             remoteLabel?.textColor = .systemGreen
             remoteLocalLabel?.stringValue = info.localURL.isEmpty ? "" : "本地直连（备用）：\(info.localURL)"
         }
+        updateQR(link: info.pairURL)
+    }
+
+    /// 配对二维码图片接口：优先国内可直连的，失败再换一个公共接口
+    private static let qrSources = [
+        "https://api.pwmqr.com/qrcode/create/?url=",
+        "https://api.qrserver.com/v1/create-qr-code/?size=260x260&margin=0&data="
+    ]
+
+    /// 连接码变化时刷新二维码（内容就是配对地址，含连接码；地址没变则跳过）
+    private func updateQR(link: String) {
+        guard let qrImage, link != qrLink else { return }
+        qrLink = link
+        qrImage.image = nil
+        guard !link.isEmpty else {
+            qrHint?.stringValue = "打开「启用手机遥控」后这里会显示配对二维码。"
+            return
+        }
+        qrHint?.stringValue = "二维码生成中…"
+        loadQR(link: link, sources: Self.qrSources)
+    }
+
+    /// 依次尝试各图片接口，成功即显示；全部失败则退回文字提示
+    private func loadQR(link: String, sources: [String]) {
+        let encoded = link.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? ""
+        guard let base = sources.first, let url = URL(string: base + encoded) else { return }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 10
+        URLSession.shared.dataTask(with: request) { [weak self] data, _, error in
+            DispatchQueue.main.async {
+                guard let self, self.qrLink == link else { return }   // 连接码已刷新，丢弃这次结果
+                if let data, error == nil, let image = NSImage(data: data) {
+                    self.qrImage?.image = image
+                    self.qrHint?.stringValue = "手机扫码 → 打开配对页并自动配对；配对后点「进入控制中心」操作。"
+                } else if sources.count > 1 {
+                    self.loadQR(link: link, sources: Array(sources.dropFirst()))
+                } else {
+                    self.qrHint?.stringValue = "二维码加载失败（可能是网络问题）：点「打开配对页」用手机扫码，或把连接码发给手机手动输入。"
+                }
+            }
+        }.resume()
     }
 
     /// 复制连接码：手机在官网页面的配对区块里输入它即可
