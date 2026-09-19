@@ -155,28 +155,35 @@
   /* ---------- 手机遥控配对（内联区块） ---------- */
   .mz-label { display: block; font-size: .82rem; font-weight: 600; color: var(--muted); margin: 16px 0 7px; }
   .mz-input {
-    width: 100%; padding: 13px 14px; font-size: 1rem;
+    width: 100%; padding: 13px 14px; font-size: 1rem; letter-spacing: 1px;
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     border: 1.5px solid var(--line); border-radius: 12px; outline: none; background: #f8f9fc; color: var(--ink);
   }
   .mz-input:focus { border-color: var(--c1); background: #fff; }
   .mz-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 14px; }
-  .mz-btn { width: auto; min-width: 150px; text-align: center; }
+  .mz-actions > * { flex: 1 1 138px; }
+  .mz-actions button, .mz-actions a { width: 100%; text-align: center; }
   .mz-err { font-size: .82rem; color: #dc2626; min-height: 1.1em; margin-top: 10px; }
-  .mz-row { display: flex; align-items: center; justify-content: space-between; font-size: .82rem; color: var(--muted); margin-top: 14px; }
-  .mz-pill { font-size: .72rem; padding: 3px 10px; border-radius: 999px; background: #eaf7ef; border: 1px solid #bfe6cd; color: #16794a; }
-  .mz-code {
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 1.05rem; font-weight: 700;
-    letter-spacing: .3px; word-break: break-all; text-align: center; color: #2b3350;
-    background: #f4f6fc; border: 1.5px dashed #cfd6ea; border-radius: 12px; padding: 14px; margin: 10px 0 16px;
-  }
-  .mz-qrbox {
-    width: 220px; height: 220px; margin: 0 auto; padding: 12px; background: #fff;
-    border: 1.5px solid var(--line); border-radius: 14px;
-    display: flex; align-items: center; justify-content: center;
-  }
+  .mz-row { display: flex; align-items: center; justify-content: space-between; gap: 10px;
+            font-size: .82rem; color: var(--muted); margin: 14px 0 8px; }
+  .mz-pill { font-size: .72rem; padding: 3px 10px; border-radius: 999px; white-space: nowrap;
+             background: #f1f3f9; border: 1px solid #dfe3ee; color: #6b7280; }
+  .mz-pill.ok { background: #eaf7ef; border-color: #bfe6cd; color: #16794a; }
+  .mz-pill.warn { background: #fff5e8; border-color: #f5d9ae; color: #a35c00; }
+  .mz-code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 1.3rem; font-weight: 700;
+             letter-spacing: 3px; text-align: center; color: #2b3350; background: #f4f6fc;
+             border: 1.5px dashed #cfd6ea; border-radius: 12px; padding: 14px; }
+  .mz-qrbox { width: 196px; height: 196px; margin: 14px auto 6px; padding: 10px; background: #fff;
+              border: 1.5px solid var(--line); border-radius: 14px;
+              display: flex; align-items: center; justify-content: center; }
   .mz-qrbox img { width: 100%; height: 100%; display: block; }
-  @media (max-width: 520px) { .mz-qrbox { width: 188px; height: 188px; } .mz-btn { width: 100%; } }
+  .mz-state { display: flex; flex-wrap: wrap; gap: 16px; font-size: .85rem; color: var(--muted); margin: 4px 0 2px; }
+  .mz-state b { color: var(--ink); font-variant-numeric: tabular-nums; }
+  .mz-big { font-size: 1.5rem; font-weight: 700; text-align: center; color: #2b3350;
+            font-variant-numeric: tabular-nums; margin: 6px 0 2px; }
+  .mz-range { width: 100%; margin: 12px 0 2px; accent-color: var(--c1); }
+  .mz-sep { height: 1px; background: var(--line); margin: 20px 0 4px; }
+  @media (max-width: 520px) { .mz-qrbox { width: 172px; height: 172px; } }
 </style>
 </head>
 <body>
@@ -184,7 +191,6 @@
   <nav>
     <div class="brand">KDXZHX</div>
     <div class="links">
-      <a href="/">应用集合</a>
       <a href="#remote">手机遥控</a>
       <a href="#install">安装</a>
       <a href="#faq">常见问题</a>
@@ -252,42 +258,66 @@
       </div>
     </section>
 
-    <!-- 手机遥控配对 -->
+    <!-- 手机遥控配对：手机在官网上操作，指令经公共中转回到 Mac -->
     <section class="card" id="remote">
       <h2>手机遥控配对</h2>
       <p class="lead">
-        手机和 Mac 连同一个 Wi-Fi，就能用手机当遥控器：合上 / 打开 / 播放一次开合 / 拖动进度。
-        下面这串<span class="hl">连接码</span>由 Mac 端实时生成，手机在本页输入即可配对。
+        手机打开本页、配对成功后，就能在<span class="hl">这个网页上</span>直接遥控 MacBook 的折叠动画：
+        合上 / 打开 / 播放一次开合 / 拖动进度，还能把手机贴在屏幕上用<span class="hl">陀螺仪</span>当铰链传感器。
       </p>
 
       <!-- 未配对 -->
       <div id="mzSetup">
         <label class="mz-label" for="mzCode">连接码</label>
-        <input id="mzCode" class="mz-input" type="text" autocomplete="off" autocapitalize="off"
-               spellcheck="false" placeholder="192.168.1.5:52800#836291">
+        <input id="mzCode" class="mz-input" type="text" autocomplete="off" autocapitalize="characters"
+               spellcheck="false" maxlength="12" placeholder="例如 K7F3Q2M9">
         <div class="mz-actions">
-          <button class="btn primary mz-btn" id="mzPair" type="button">配对</button>
+          <button class="btn primary" id="mzPair" type="button">配对</button>
         </div>
         <p class="mz-err" id="mzErr"></p>
         <p class="note">
-          连接码在 Mac 的「MacKZ 设置 → 手机遥控」里，点 <b>复制连接码</b> 后粘到这里即可；<br>
-          也可以直接粘整串（形如 <b>192.168.1.5:52800#836291</b>）。手机与 Mac 必须在同一个 Wi-Fi。
+          连接码在 Mac 的「MacKZ 设置 → 手机遥控」里，点 <b>复制连接码</b> 发到手机上即可；<br>
+          如果是在 Mac 上打开的，页面会自动带出连接码，直接用手机扫下面的二维码最省事。
         </p>
       </div>
 
       <!-- 已配对 -->
       <div id="mzPaired" hidden>
-        <div class="mz-row"><span>已配对 · 连接码</span><span class="mz-pill">就绪</span></div>
+        <div class="mz-row"><span>连接码</span><span class="mz-pill" id="mzPill">连接中…</span></div>
         <div class="mz-code" id="mzCodeBig"></div>
         <div class="mz-qrbox"><img id="mzQr" alt="配对二维码"></div>
-        <div class="mz-actions">
-          <a class="btn primary mz-btn" id="mzGo" href="#">在手机上打开控制页</a>
-          <button class="btn ghost mz-btn" id="mzReset" type="button">换一个连接码</button>
+        <p class="note" style="text-align:center">手机扫这个二维码 → 打开本页并自动配对</p>
+
+        <div class="mz-sep"></div>
+        <div class="mz-state">
+          <span>折叠进度 <b id="mzProgress">--</b></span>
+          <span>铰链角度 <b id="mzAngle">--</b></span>
         </div>
-        <p class="note">
-          二维码里就是 Mac 的局域网控制页地址，用手机相机扫一下直达；<br>
-          点按钮没反应时，多半是浏览器开着「仅限 HTTPS」，到「设置 → Safari → 高级」里关掉即可。
+        <div class="mz-actions">
+          <button class="btn primary" id="mzClose" type="button">合上</button>
+          <button class="btn ghost" id="mzOpen" type="button">打开</button>
+          <button class="btn ghost" id="mzPlay" type="button">播放一次开合</button>
+          <button class="btn ghost" id="mzReset" type="button">复位（展开）</button>
+        </div>
+        <input class="mz-range" id="mzSlider" type="range" min="0" max="100" value="0" step="1">
+
+        <div class="mz-sep"></div>
+        <div class="mz-row"><span>陀螺仪铰链模式（手机当传感器）</span><span class="mz-pill" id="mzGyroState">未启用</span></div>
+        <div class="mz-big" id="mzGyroAngle">--°</div>
+        <div class="mz-actions">
+          <button class="btn primary" id="mzGyroStart" type="button">启用陀螺仪</button>
+          <button class="btn ghost" id="mzGyroStop" type="button">停止</button>
+          <button class="btn ghost" id="mzGyroZero" type="button">标定为「完全合上」</button>
+          <button class="btn ghost" id="mzGyroMount" type="button">贴法：屏幕背面</button>
+        </div>
+        <p class="note" id="mzGyroTip">
+          把手机竖着贴（或用皮筋绑）在 MacBook 屏幕上、手机顶部朝屏幕顶边，点「启用陀螺仪」并允许
+          「运动与方向访问」，姿态角就会实时换算成屏幕开合角。首次使用请先合上屏幕点一次「标定为完全合上」。
         </p>
+
+        <div class="mz-actions" style="margin-top:18px">
+          <button class="btn ghost" id="mzUnpair" type="button">换一个连接码</button>
+        </div>
       </div>
     </section>
 
@@ -421,45 +451,127 @@
   }
 </script>
 <script>
-/* 手机遥控配对：连接码 = ip:port#口令。
-   说明：https 页面无法用 fetch 直接请求局域网 http 服务（浏览器按「混合内容」拦截），
-   所以本页只做配对入口 —— 解析出 Mac 地址后用顶层跳转把手机送进本地控制页。 */
+/* 手机遥控：官网页面 ⇄ 公共中转（MQTT over WebSocket）⇄ Mac。
+   为什么这样绕：iOS 只在 https 页面才开放陀螺仪，而 https 页面被浏览器禁止直接请求局域网的
+   http 服务（混合内容）；所以让 Mac 主动连出去，两端在同一个公共中转上对话。
+   只传指令与角度数字，房间号就是这次随机生成的连接码。 */
 (function () {
   var $ = function (id) { return document.getElementById(id); };
   if (!$('mzCode')) { return; }
 
-  // 解析连接码；分隔符兼容 # / @ / / / - 与空格，口令可省略
-  function parseCode(raw) {
-    var s = String(raw || '').trim().replace(/\s+/g, '');
-    if (!s) { return null; }
-    var eq = s.lastIndexOf('c=');          // 兼容整段带有 c= 的片段或完整 URL 粘贴
-    if (eq >= 0) { s = s.slice(eq + 2); }
-    try { s = decodeURIComponent(s); } catch (e) { /* 非法转义时按原文继续 */ }
-    var m = s.match(/^(\d{1,3}(?:\.\d{1,3}){3}):(\d{1,5})(?:[#@\/-]?(\d{1,6}))?$/);
-    if (!m) { return null; }
-    var ip = m[1], port = Number(m[2]), token = m[3] || '';
-    var parts = ip.split('.');
-    for (var i = 0; i < 4; i++) {
-      var n = Number(parts[i]);
-      if (!(n >= 0 && n <= 255)) { return null; }
+  var BROKER = 'wss://broker.hivemq.com:8884/mqtt';
+
+  /* ---------- 极简 MQTT 3.1.1 over WebSocket 客户端（无第三方依赖） ---------- */
+  // subTopic：订阅 Mac 回传的状态；pubTopic：把指令发回 Mac（两者必须分开，别混用）
+  function mqttConnect(clientId, subTopic, pubTopic, handlers) {
+    var ws = null, buf = new Uint8Array(0), pingTimer = null, retryTimer = null, closedByUs = false;
+
+    function str(s) {
+      var b = new TextEncoder().encode(s), o = new Uint8Array(b.length + 2);
+      o[0] = b.length >> 8; o[1] = b.length & 255; o.set(b, 2); return o;
     }
-    if (!(port >= 1 && port <= 65535)) { return null; }
-    return { ip: ip, port: port, token: token };
+    function concat(list) {
+      var n = 0, i;
+      for (i = 0; i < list.length; i++) { n += list[i].length; }
+      var o = new Uint8Array(n), off = 0;
+      for (i = 0; i < list.length; i++) { o.set(list[i], off); off += list[i].length; }
+      return o;
+    }
+    function varLen(n) {
+      var o = [];
+      do { var d = n % 128; n = Math.floor(n / 128); if (n > 0) { d |= 128; } o.push(d); } while (n > 0);
+      return o;
+    }
+    function packet(type, body) {
+      var rl = varLen(body.length), o = new Uint8Array(1 + rl.length + body.length);
+      o[0] = type; o.set(rl, 1); o.set(body, 1 + rl.length); return o;
+    }
+    function send(bytes) { if (ws && ws.readyState === 1) { ws.send(bytes); } }
+
+    function doSubscribe() {
+      send(packet(0x82, concat([new Uint8Array([0, 1]), str(subTopic), new Uint8Array([0])])));
+    }
+    function pub(msg) {
+      send(packet(0x30, concat([str(pubTopic), new TextEncoder().encode(msg)])));
+    }
+    function handle(first, body) {
+      var type = first >> 4;
+      if (type === 2) {                                   // CONNACK
+        doSubscribe();
+        pingTimer = setInterval(function () { send(new Uint8Array([0xC0, 0x00])); }, 30000);
+      } else if (type === 9) {                             // SUBACK
+        handlers.onStatus('connected');
+      } else if (type === 3) {                             // PUBLISH
+        var qos = (first >> 1) & 3;
+        var tlen = (body[0] << 8) | body[1];
+        var off = 2 + tlen + (qos > 0 ? 2 : 0);
+        handlers.onMessage(new TextDecoder().decode(body.slice(off)));
+      }
+    }
+    function feed(chunk) {
+      buf = concat([buf, chunk]);
+      for (;;) {
+        if (buf.length < 2) { return; }
+        var i = 1, mult = 1, rl = 0, d = 0;
+        do {
+          if (i >= buf.length) { return; }
+          d = buf[i++]; rl += (d & 127) * mult; mult *= 128;
+        } while (d & 128);
+        if (buf.length < i + rl) { return; }
+        var first = buf[0], body = buf.slice(i, i + rl);
+        buf = buf.slice(i + rl);
+        handle(first, body);
+      }
+    }
+
+    function open() {
+      closedByUs = false;
+      ws = new WebSocket(BROKER, 'mqtt');
+      ws.binaryType = 'arraybuffer';
+      ws.onopen = function () {
+        var vh = concat([str('MQTT'), new Uint8Array([4, 2, 0, 60])]);
+        send(packet(0x10, concat([vh, str(clientId)])));
+      };
+      ws.onmessage = function (e) { feed(new Uint8Array(e.data)); };
+      ws.onerror = function () { handlers.onStatus('error'); };
+      ws.onclose = function () {
+        if (pingTimer) { clearInterval(pingTimer); pingTimer = null; }
+        if (closedByUs) { return; }
+        handlers.onStatus('closed');
+        if (retryTimer) { clearTimeout(retryTimer); }
+        retryTimer = setTimeout(open, 5000);              // 断线 5 秒后自动重连
+      };
+    }
+    open();
+
+    return {
+      publish: pub,
+      close: function () { closedByUs = true; if (retryTimer) { clearTimeout(retryTimer); } if (ws) { ws.close(); } }
+    };
   }
 
-  // 控制页地址（Mac 本地 http 服务，口令沿用 t= 写法）
-  function controlURL(info) {
-    var url = 'http://' + info.ip + ':' + info.port + '/';
-    if (info.token) { url += '?t=' + encodeURIComponent(info.token); }
-    return url;
+  /* ---------- 连接码与配对 ---------- */
+  var client = null, code = '';
+
+  function normalize(raw) {
+    var s = String(raw || '').toUpperCase().replace(/[^0-9A-Z]/g, '');
+    return s.length >= 6 ? s : '';
+  }
+  function upTopic() { return 'mackz/' + code + '/up'; }
+  function downTopic() { return 'mackz/' + code + '/down'; }
+
+  function setPill(text, cls) {
+    var el = $('mzPill');
+    el.textContent = text;
+    el.className = 'mz-pill' + (cls ? ' ' + cls : '');
   }
 
-  // 二维码走公开图片接口，失败自动换备用源；两个都挂掉时仍可用按钮跳转
-  function renderQR(target) {
-    var img = $('mzQr');
-    var encoded = encodeURIComponent(target);
+  // 二维码内容就是本页地址（带上连接码），手机扫一下即可打开本页并自动配对
+  function renderQR() {
+    var target = location.origin + location.pathname + '#c=' + code;
+    var img = $('mzQr'), encoded = encodeURIComponent(target);
     img.onerror = function () {
-      if (img.dataset.fallback) { img.removeAttribute('src'); img.alt = '二维码加载失败，请点下面按钮直接打开'; return; }
+      if (img.dataset.fallback) { img.removeAttribute('src'); img.alt = '二维码加载失败，请手动输入连接码'; return; }
       img.dataset.fallback = '1';
       img.src = 'https://api.pwmqr.com/qrcode/create/?url=' + encoded;
     };
@@ -467,18 +579,46 @@
     img.src = 'https://api.qrserver.com/v1/create-qr-code/?size=260x260&margin=0&data=' + encoded;
   }
 
-  function showPaired(info) {
-    var target = controlURL(info);
-    $('mzCodeBig').textContent = info.ip + ':' + info.port + (info.token ? '#' + info.token : '');
-    $('mzGo').href = target;
-    renderQR(target);
-    $('mzSetup').hidden = true;
-    $('mzPaired').hidden = false;
-    // 写回地址栏：刷新或把链接发给手机后仍能直接进入配对状态
-    try { history.replaceState(null, '', '#c=' + encodeURIComponent(info.ip + ':' + info.port + '#' + info.token)); } catch (e) {}
+  function send(msg) { if (client) { client.publish(JSON.stringify(msg)); } }
+
+  function connect() {
+    if (client) { client.close(); client = null; }
+    setPill('连接中…', 'warn');
+    client = mqttConnect('mackz-web-' + Math.random().toString(36).slice(2, 9), downTopic(), upTopic(), {
+      onStatus: function (st) {
+        if (st === 'connected') { setPill('已连接', 'ok'); applyProgress(lastProgress); }
+        else if (st === 'closed' || st === 'error') { setPill('已断开，5 秒后重连', 'warn'); }
+      },
+      onMessage: function (text) {
+        var obj = null;
+        try { obj = JSON.parse(text); } catch (e) { return; }
+        if (typeof obj.p === 'number') { applyProgress(obj.p); }
+        if (typeof obj.g === 'number') { $('mzAngle').textContent = obj.g.toFixed(1) + '°'; }
+      }
+    });
   }
 
-  function reset() {
+  var lastProgress = 0, sliderLock = 0;
+  function applyProgress(p) {
+    lastProgress = p;
+    $('mzProgress').textContent = Math.round(p * 100) + '%';
+    // 用户正在拖滑块时不要被回传值抢走控制
+    if (Date.now() > sliderLock) { $('mzSlider').value = Math.round(p * 100); }
+  }
+
+  function showPaired(value) {
+    code = value;
+    $('mzCodeBig').textContent = code;
+    $('mzSetup').hidden = true;
+    $('mzPaired').hidden = false;
+    try { history.replaceState(null, '', '#c=' + code); } catch (e) {}
+    renderQR();
+    connect();
+  }
+
+  function unpair() {
+    if (client) { client.close(); client = null; }
+    stopGyro();
     $('mzPaired').hidden = true;
     $('mzSetup').hidden = false;
     $('mzErr').textContent = '';
@@ -488,29 +628,120 @@
   }
 
   $('mzPair').onclick = function () {
-    var info = parseCode($('mzCode').value);
-    if (!info) {
-      $('mzErr').textContent = '连接码不正确：应形如 192.168.1.5:52800#836291';
-      return;
-    }
+    var v = normalize($('mzCode').value);
+    if (!v) { $('mzErr').textContent = '连接码至少 6 位：字母或数字（Mac 面板上显示的那串）'; return; }
     $('mzErr').textContent = '';
-    showPaired(info);
+    showPaired(v);
   };
   $('mzCode').addEventListener('keydown', function (e) { if (e.key === 'Enter') { $('mzPair').click(); } });
-  $('mzReset').onclick = reset;
-  // Mac 端「打开配对页」会把连接码放在 #c= 里直接带进来
-  var hash = location.hash || '';
-  if (hash.indexOf('#c=') === 0) {
-    var info = parseCode(hash.slice(3));
-    if (info) { showPaired(info); }
+  $('mzUnpair').onclick = unpair;
+
+  /* ---------- 遥控按钮与滑块 ---------- */
+  $('mzClose').onclick = function () { send({ a: 'close' }); applyProgress(1); };
+  $('mzOpen').onclick = function () { send({ a: 'open' }); applyProgress(0); };
+  $('mzPlay').onclick = function () { send({ a: 'play' }); };
+  $('mzReset').onclick = function () { send({ a: 'open' }); applyProgress(0); };
+  $('mzSlider').oninput = function () {
+    sliderLock = Date.now() + 1200;
+    var v = Number($('mzSlider').value);
+    applyProgress(v / 100);
+    send({ a: 'progress', v: v / 100 });
+  };
+
+  /* ---------- 陀螺仪：屏幕法线绕铰链轴旋转，重力在手机 y/z 轴上的投影直接解出开合角 ---------- */
+  var gyroMount = localStorage.getItem('mackzMount') || 'back';
+  var gyroZero = parseFloat(localStorage.getItem('mackzZero') || '0') || 0;
+  var gyroLastLid = null, gyroLastSend = 0, gyroOn = false;
+
+  function refreshMountLabel() {
+    $('mzGyroMount').textContent = '贴法：' + (gyroMount === 'back' ? '屏幕背面' : '屏幕正面');
   }
-  // 同一页面上再次带新连接码打开时（只换 hash 不刷新）也能重新配对
-  window.addEventListener('hashchange', function () {
-    if (location.hash.indexOf('#c=') === 0) {
-      var again = parseCode(location.hash.slice(3));
-      if (again) { showPaired(again); }
+  refreshMountLabel();
+
+  function lidAngleFrom(g) {
+    var raw = Math.atan2(-g.y, g.z) * 180 / Math.PI;
+    raw = ((raw % 360) + 360) % 360;                     // 归一化，避开 ±180° 附近的跳变
+    var lid = gyroMount === 'back' ? 180 - raw : (raw > 180 ? 360 - raw : raw);
+    return Math.min(Math.max(lid, 0), 180);
+  }
+
+  function onMotion(e) {
+    var g = e.accelerationIncludingGravity;
+    if (!g || g.y === null || g.z === null) { return; }
+    gyroLastLid = lidAngleFrom(g);
+    var angle = Math.max(0, gyroLastLid - gyroZero);
+    $('mzGyroAngle').textContent = Math.round(angle) + '°';
+    var now = Date.now();
+    if (now - gyroLastSend < 50) { return; }             // 限流到 20Hz
+    gyroLastSend = now;
+    send({ h: Number(angle.toFixed(2)) });
+  }
+
+  function startGyro() {
+    window.addEventListener('devicemotion', onMotion, true);
+    gyroOn = true;
+    $('mzGyroState').textContent = '接管中';
+    $('mzGyroState').className = 'mz-pill ok';
+    $('mzGyroTip').textContent = '保持本页在前台：切到后台或锁屏会暂停上报，Mac 会自动交回本机传感器。';
+  }
+  function stopGyro() {
+    window.removeEventListener('devicemotion', onMotion, true);
+    gyroOn = false;
+    $('mzGyroState').textContent = '已停止';
+    $('mzGyroState').className = 'mz-pill';
+    $('mzGyroAngle').textContent = '--°';
+    $('mzGyroTip').textContent = '已停止上报，Mac 会在 1.5 秒内交回本机传感器。';
+  }
+
+  $('mzGyroStart').onclick = function () {
+    if (!window.isSecureContext) {
+      $('mzGyroTip').textContent = '当前页面不是 https，浏览器不允许读取运动传感器。请用 kdxzhx.top 的 https 地址打开本页。';
+      return;
     }
-  });
+    if (!window.DeviceMotionEvent) {
+      $('mzGyroTip').textContent = '这个浏览器不支持运动传感器（DeviceMotion）。';
+      return;
+    }
+    if (typeof window.DeviceMotionEvent.requestPermission === 'function') {
+      // iOS 13+ 必须在用户手势里申请权限
+      window.DeviceMotionEvent.requestPermission().then(function (res) {
+        if (res === 'granted') { startGyro(); }
+        else { $('mzGyroTip').textContent = '未授权：请在 iOS「设置 → Safari → 运动与方向访问」中打开，再重新点「启用陀螺仪」。'; }
+      }).catch(function () {
+        $('mzGyroTip').textContent = '申请权限失败：必须用 https 打开，且要由点击按钮触发。';
+      });
+    } else {
+      startGyro();
+    }
+  };
+  $('mzGyroStop').onclick = stopGyro;
+  $('mzGyroZero').onclick = function () {
+    if (gyroLastLid === null) { $('mzGyroTip').textContent = '先点「启用陀螺仪」，等角度显示出来再标定。'; return; }
+    gyroZero = gyroLastLid;                              // 当前姿态记为 0°（完全合上）
+    localStorage.setItem('mackzZero', String(gyroZero));
+    $('mzGyroTip').textContent = '已把当前姿态标定为 0°。掀开屏幕，数值应从 0° 开始变大。';
+  };
+  $('mzGyroMount').onclick = function () {
+    gyroMount = gyroMount === 'back' ? 'front' : 'back';
+    localStorage.setItem('mackzMount', gyroMount);
+    refreshGyroMount();
+  };
+  function refreshGyroMount() {
+    refreshMountLabel();
+    gyroZero = 0;
+    localStorage.setItem('mackzZero', '0');
+    $('mzGyroTip').textContent = '已切换贴法并清除标定：请合上 MacBook 后重新点「标定为完全合上」。';
+  }
+
+  /* ---------- 入口：带 #c= 直接配对；否则等用户输入 ---------- */
+  function fromHash() {
+    var h = location.hash || '';
+    if (h.indexOf('#c=') !== 0) { return; }
+    var v = normalize(decodeURIComponent(h.slice(3)));
+    if (v) { showPaired(v); }
+  }
+  fromHash();
+  window.addEventListener('hashchange', fromHash);
 })();
 </script>
 </body>

@@ -40,25 +40,10 @@ final class RemoteControl {
 
     var isRunning: Bool { listener != nil }
 
-    /// 手机应访问的完整地址；未启动或取不到局域网 IP 时返回空串
+    /// 手机应访问的完整地址（局域网直连，作为官网中转不可用时的备用路径）
     var accessURL: String {
         guard isRunning, !token.isEmpty, let ip = Self.localIPAddress() else { return "" }
         return "http://\(ip):\(port)/?t=\(token)"
-    }
-
-    /// 配对连接码：`192.168.1.5:52800#836291`。
-    /// 手机在官网配对页粘贴这一串即可解析出 Mac 地址与本次口令，无需再输入 IP。
-    var pairCode: String {
-        guard isRunning, !token.isEmpty, let ip = Self.localIPAddress() else { return "" }
-        return "\(ip):\(port)#\(token)"
-    }
-
-    /// 官网配对页地址（介绍页里的「手机遥控配对」区块）。
-    /// 连接码放在 URL 的 `#` 片段里 —— 片段不会发往服务器，只在本机浏览器内解析。
-    var pairPageURL: String {
-        guard !pairCode.isEmpty,
-              let encoded = pairCode.addingPercentEncoding(withAllowedCharacters: .alphanumerics) else { return "" }
-        return "https://kdxzhx.top/mackz#c=\(encoded)"
     }
 
     // MARK: - 启停

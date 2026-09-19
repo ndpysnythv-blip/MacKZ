@@ -31,11 +31,12 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     var onSimulateOpen: (() -> Void)?
     /// 设置「合盖不休眠」：true = 开启（合盖继续运行），false = 恢复系统默认
     var onSetSleepDisabled: ((Bool) -> Void)?
-    /// 手机遥控信息：是否启用、访问地址、配对连接码、官网配对页地址、运行状态
-    var remoteInfoProvider: (() -> (enabled: Bool, url: String, code: String, pairURL: String, status: String))?
-    /// 「刷新地址」：重新监听（重新读局域网 IP 并换一个随机口令）
+    /// 手机遥控信息：是否启用、连接码、中转状态、局域网直连地址（备用）、官网配对地址
+    var remoteInfoProvider: (() -> (enabled: Bool, code: String, status: String,
+                                   localURL: String, pairURL: String))?
+    /// 「刷新连接码」：换一个新连接码并重连中转
     var onRefreshRemote: (() -> Void)?
-    /// 「打开配对页」：在浏览器里打开官网配对页（连接码已带在 URL 片段里）
+    /// 「打开配对页」：在浏览器里打开官网介绍页的配对区块（连接码已带在 URL 片段里）
     var onOpenPairPage: (() -> Void)?
     /// 打开官网介绍页
     var onOpenHomepage: (() -> Void)?
@@ -54,8 +55,10 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     private var manualValueLabel: NSTextField?
     /// 合盖休眠状态显示
     private var sleepLabel: NSTextField?
-    /// 手机遥控地址显示
+    /// 手机遥控连接码显示
     private var remoteLabel: NSTextField?
+    /// 局域网直连地址（备用路径）显示
+    private var remoteLocalLabel: NSTextField?
     private var timer: Timer?
     /// NSControl.target 是弱引用，这里强引用住所有回调持有者，防止被释放
     private var handlers: [NSObject] = []
@@ -166,34 +169,35 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         tip.preferredMaxLayoutWidth = 520
         stack.addArrangedSubview(sectionBox(title: "权限", rows: [permissionRow, tip]))
 
-        // ---------- 手机遥控（演示用） ----------
+        // ---------- 手机遥控 ----------
         let remoteState = NSTextField(labelWithString: "读取中…")
-        remoteState.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
+        remoteState.font = .monospacedDigitSystemFont(ofSize: 13, weight: .semibold)
         remoteState.lineBreakMode = .byTruncatingMiddle
         remoteLabel = remoteState
+        let remoteLocalState = NSTextField(labelWithString: "")
+        remoteLocalState.font = .systemFont(ofSize: 11)
+        remoteLocalState.textColor = .tertiaryLabelColor
+        remoteLocalState.lineBreakMode = .byTruncatingMiddle
+        remoteLocalLabel = remoteLocalState
         let remoteTip = NSTextField(wrappingLabelWithString:
-            "推荐用法（官网配对）\n"
-            + "① Mac 上点「打开配对页」，浏览器进入 kdxzhx.top/mackz 的「手机遥控配对」区块，页面上会显示大号连接码和二维码；\n"
-            + "② 手机连同一个 Wi-Fi，扫码即可直接进入控制页；扫不了时在配对页输入框里粘贴连接码也一样；\n"
-            + "③ 连接码形如 192.168.1.5:52800#836291，点「复制连接码」可以自己发到手机上。\n\n"
-            + "服务只监听本机局域网端口，用纯 http（不使用证书，因此不会出现任何钥匙串授权弹窗）。\n\n"
-            + "打不开时按顺序排查：\n"
-            + "①「系统设置 → 网络 → 防火墙」是否拦住了 MacKZ 的传入连接；\n"
-            + "② macOS 15 起还需要在「隐私与安全性 → 本地网络」里允许 MacKZ；\n"
-            + "③ 手机和 Mac 是否在同一个 Wi-Fi（路由器的「访客网络」会隔断设备互访）；\n"
-            + "④ 若 Safari 报「导览失败…已启用『仅限 HTTPS』的 HTTP URL」：说明该地址曾被 https 访问过，"
-            + "Safari 记住了它。请到「设置 → Safari → 高级」里关掉「仅限 HTTPS」，或改用另一个端口（高级设置 → 手机遥控端口）。")
+            "用法：\n"
+            + "① Mac 上点「打开配对页」，浏览器进入 kdxzhx.top/mackz 的「手机遥控配对」区块；\n"
+            + "② 手机打开同一个网址（或直接扫页面上的二维码），输入上面的连接码配对；\n"
+            + "③ 配对后手机就在官网页面上操作：合上 / 打开 / 播放一次 / 拖进度，陀螺仪模式也能用。\n\n"
+            + "为什么走官网：iOS 只在 https 页面才开放陀螺仪，而 https 页面被浏览器禁止直接访问局域网的 http 地址。\n"
+            + "所以 Mac 主动连一个公共中转（只传指令和角度数字，房间号就是这次随机生成的连接码），"
+            + "手机在官网页面上通过中转和 Mac 对话 —— 手机和 Mac 甚至不必在同一个 Wi-Fi。\n\n"
+            + "下面那行「本地直连」是备用路径：中转连不上时，手机和 Mac 在同一 Wi-Fi 下打开它也能控制（但没有陀螺仪）。")
         remoteTip.font = .systemFont(ofSize: 11)
         remoteTip.textColor = .tertiaryLabelColor
         remoteTip.preferredMaxLayoutWidth = 500
         // 陀螺仪用法说明：手机没有铰链传感器也能靠姿态角驱动折叠动画
         let gyroTip = NSTextField(wrappingLabelWithString:
             "陀螺仪模式：把手机竖着贴（或用皮筋绑）在 MacBook 屏幕上、手机顶部朝屏幕顶边，"
-            + "手机页面点「启用陀螺仪」并允许「运动与方向访问」，手机姿态角就会实时换算成屏幕开合角，"
+            + "在官网页面上点「启用陀螺仪」并允许「运动与方向访问」，手机姿态角就会实时换算成屏幕开合角，"
             + "替代本机铰链传感器 —— 适合没有 Lid Angle Sensor 的机型。\n"
             + "首次使用请在合上屏幕时点一次「标定为完全合上」；手机锁屏或切到后台会自动交回本机传感器。\n"
-            + "注意：iOS 只允许 https 页面读取运动传感器，而本服务为了不弹钥匙串授权框固定用 http，"
-            + "所以陀螺仪模式在手机上取不到数据 —— 遥控按钮与进度滑块不受影响，照常可用。")
+            + "官网是 https 页面，符合 iOS 对「安全上下文」的要求，所以陀螺仪能正常读数。")
         gyroTip.font = .systemFont(ofSize: 11)
         gyroTip.textColor = .tertiaryLabelColor
         gyroTip.preferredMaxLayoutWidth = 500
@@ -201,11 +205,12 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         // 这两段说明很长，默认折叠，需要时点标题展开，避免把面板撑得过长
         let remoteHelp = collapsibleBox(title: "更多介绍", rows: [remoteTip, gyroTip])
 
-        stack.addArrangedSubview(sectionBox(title: "手机遥控（演示用）", rows: [
+        stack.addArrangedSubview(sectionBox(title: "手机遥控（手机在官网上操作）", rows: [
             makeRow(views: [remoteState]),
+            makeRow(views: [remoteLocalState]),
             makeRow(views: [makeButton("复制连接码", #selector(copyRemoteURL)),
                             makeButton("打开配对页", #selector(openPairPage)),
-                            makeButton("刷新地址", #selector(refreshRemoteURL))]),
+                            makeButton("刷新连接码", #selector(refreshRemoteURL))]),
             switchRow("启用手机遥控", \.remoteControl),
             switchRow("允许手机陀螺仪接管角度", \.phoneGyro),
             remoteHelp
@@ -604,22 +609,25 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     @objc private func disableSleepDisabled() { onSetSleepDisabled?(false) }
     @objc private func openLockScreenSettings() { PowerControl.openLockScreenSettings() }
 
-    /// 刷新手机遥控连接码与状态
+    /// 刷新手机遥控连接码、中转状态与备用直连地址
     func refreshRemoteInfo() {
         guard let info = remoteInfoProvider?() else { return }
         if !info.enabled {
             remoteLabel?.stringValue = "手机遥控：已关闭"
             remoteLabel?.textColor = .secondaryLabelColor
+            remoteLocalLabel?.stringValue = ""
         } else if info.code.isEmpty {
             remoteLabel?.stringValue = "手机遥控：\(info.status)"
             remoteLabel?.textColor = .systemOrange
+            remoteLocalLabel?.stringValue = ""
         } else {
-            remoteLabel?.stringValue = "连接码：\(info.code)"
+            remoteLabel?.stringValue = "连接码：\(info.code)   ·   \(info.status)"
             remoteLabel?.textColor = .systemGreen
+            remoteLocalLabel?.stringValue = info.localURL.isEmpty ? "" : "本地直连（备用）：\(info.localURL)"
         }
     }
 
-    /// 复制连接码（`192.168.1.5:52800#836291`），手机在官网配对页粘贴即可
+    /// 复制连接码：手机在官网页面的配对区块里输入它即可
     @objc private func copyRemoteURL() {
         guard let code = remoteInfoProvider?().code, !code.isEmpty else { return }
         NSPasteboard.general.clearContents()

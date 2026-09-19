@@ -16,7 +16,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var updateProgressWindow: UpdateProgressWindow?
     /// 手机遥控（演示用）：局域网 HTTP 服务
     private let remote = RemoteControl()
+    /// 官网中转通道（MQTT over WebSocket）：手机在官网页面上操作，陀螺仪也能用
+    private let relay = RemoteRelay()
     private var remoteStatus = "未启动"
+    /// 中转通道状态文本
+    private var relayStatus = "中转未启动"
     /// 手机陀螺仪数据有效期：收到数据后一段时间内由手机接管角度，本机传感器读数被忽略
     private var phoneHingeDeadline: CFTimeInterval = 0
     private var phoneHingeWatchdog: Timer?
@@ -77,7 +81,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settings.onSetSleepDisabled = { [weak self] disabled in self?.setSleepDisabled(disabled) }
         settings.onRefreshRemote = { [weak self] in self?.restartRemote() }
         settings.onOpenPairPage = { [weak self] in
-            guard let url = self?.remote.pairPageURL, !url.isEmpty, let target = URL(string: url) else { return }
+            guard let url = self?.relay.pairPageURL, !url.isEmpty, let target = URL(string: url) else { return }
             NSWorkspace.shared.open(target)
         }
         settings.onOpenHomepage = { NSWorkspace.shared.open(UpdateChecker.homepageURL) }
@@ -94,9 +98,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     capture: CGPreflightScreenCaptureAccess() ? "已授权" : "未授权")
         }
 
-        // ---------- 手机遥控（演示用）----------
-        // 手机在浏览器里打开局域网地址，即可远程触发折叠动画
-        remote.onCommand = { [weak self] command in
+        // ---------- 手机遥控 ----------
+        // 主路径：手机在官网页面上操作，指令经公共中转（MQTT over WebSocket）回到 Mac；
+        // 备用路径：局域网 HTTP 服务（中转不通时同 Wi-Fi 直连，但没有陀螺仪）。
+        /// 把手机上的一条指令落到引擎上（两条路径共用）
+        let handleCommand: (RemoteControl.Command) -> Void = { [weak self] command in
             guard let self else { return }
             switch command {
             case .close:
@@ -109,19 +115,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.engine.setManualProgress(value)
             }
         }
+        remote.onCommand = handleCommand
+        relay.onCommand = handleCommand
         remote.onStatus = { [weak self] text in
             self?.remoteStatus = text
             self?.settings?.refreshRemoteInfo()
         }
+        // 中转状态只在局域网服务没给出结论时兜底显示，避免两行状态互相覆盖
+        relay.onStatus = { [weak self] text in
+            self?.relayStatus = text
+            self?.settings?.refreshRemoteInfo()
+        }
         // 手机陀螺仪：手机贴在屏幕上时，用手机姿态角代替铰链传感器
         remote.onHinge = { [weak self] angle in self?.acceptPhoneHinge(angle) }
+        relay.onHinge = { [weak self] angle in self?.acceptPhoneHinge(angle) }
+        // 中转需要把本机进度回传给手机页面显示
+        relay.stateProvider = { [weak self] in
+            guard let self else { return (progress: 0, angle: nil) }
+            return (progress: self.engine.progress, angle: self.engine.lastAngleDeg)
+        }
         settings.remoteInfoProvider = { [weak self] in
-            guard let self else { return (enabled: false, url: "", code: "", pairURL: "", status: "未启动") }
-            return (enabled: self.remote.isRunning, url: self.remote.accessURL,
-                    code: self.remote.pairCode, pairURL: self.remote.pairPageURL, status: self.remoteStatus)
+            guard let self else {
+                return (enabled: false, code: "", status: "未启动", localURL: "", pairURL: "")
+            }
+            let status = self.relay.isConnected ? "中转已连接" : self.relayStatus
+            return (enabled: self.config.remoteControl, code: self.relay.code, status: status,
+                    localURL: self.remote.accessURL, pairURL: self.relay.pairPageURL)
         }
         // 按配置启停手机遥控
         if config.remoteControl {
+            relay.start()
             remote.start(port: UInt16(clamping: config.remoteControlPort))
         }
 
@@ -161,6 +184,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         sensor.stop()
+        relay.stop()
         remote.stop()
         phoneHingeWatchdog?.invalidate()
         phoneHingeWatchdog = nil
@@ -203,14 +227,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - 手机遥控
 
-    /// 重新生成手机遥控地址（换 Wi-Fi、IP 变了、或口令失效时用）。
-    /// 重启监听会重新读一次局域网 IP 并换一个随机口令，手机上旧链接随即失效。
+    /// 换一个新连接码并重连官网中转；同时重启局域网直连服务（备用路径）。
+    /// 手机上的旧连接码随即失效。
     private func restartRemote() {
         guard config.remoteControl else {
+            relay.stop()
             remoteStatus = "未启动"
+            relayStatus = "中转未启动"
             settings.refreshRemoteInfo()
             return
         }
+        relay.start()
         remote.start(port: UInt16(clamping: config.remoteControlPort))
         settings.refreshRemoteInfo()
     }
@@ -233,10 +260,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // 手机遥控跟着配置热重启（开关/端口可能已改）
         if config.remoteControl {
+            relay.start()
             remote.start(port: UInt16(clamping: config.remoteControlPort))
         } else {
+            relay.stop()
             remote.stop()
             remoteStatus = "未启动"
+            relayStatus = "中转未启动"
         }
         settings.refreshRemoteInfo()
     }
