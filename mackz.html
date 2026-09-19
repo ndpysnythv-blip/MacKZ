@@ -289,7 +289,11 @@
         <div class="mz-qrbox"><img id="mzQr" alt="配对二维码"></div>
         <p class="note" style="text-align:center">手机扫这个二维码 → 打开本页并自动配对</p>
 
-        <div class="mz-actions" style="margin-top:18px">
+        <div class="mz-state" style="margin-top:12px">
+          <span>折叠进度 <b id="mzProgress">--</b></span>
+          <span>铰链角度 <b id="mzAngle">--</b></span>
+        </div>
+        <div class="mz-actions" style="margin-top:14px">
           <button class="btn primary" id="mzEnter" type="button">进入控制中心</button>
         </div>
         <div class="mz-actions" style="margin-top:10px">
@@ -297,42 +301,6 @@
         </div>
       </div>
 
-      <!-- 控制中心：配对后点「进入控制中心」进来，就是原来那套遥控界面 -->
-      <div id="mzCenter" hidden>
-        <div class="mz-row">
-          <span>控制中心 · <b id="mzCenterCode"></b></span>
-          <span class="mz-pill" id="mzPill2">连接中…</span>
-        </div>
-        <div class="mz-state">
-          <span>折叠进度 <b id="mzProgress">--</b></span>
-          <span>铰链角度 <b id="mzAngle">--</b></span>
-        </div>
-        <div class="mz-actions">
-          <button class="btn primary" id="mzClose" type="button">合上</button>
-          <button class="btn ghost" id="mzOpen" type="button">打开</button>
-          <button class="btn ghost" id="mzPlay" type="button">播放一次开合</button>
-          <button class="btn ghost" id="mzReset" type="button">复位（展开）</button>
-        </div>
-        <input class="mz-range" id="mzSlider" type="range" min="0" max="100" value="0" step="1">
-
-        <div class="mz-sep"></div>
-        <div class="mz-row"><span>陀螺仪铰链模式（手机当传感器）</span><span class="mz-pill" id="mzGyroState">未启用</span></div>
-        <div class="mz-big" id="mzGyroAngle">--°</div>
-        <div class="mz-actions">
-          <button class="btn primary" id="mzGyroStart" type="button">启用陀螺仪</button>
-          <button class="btn ghost" id="mzGyroStop" type="button">停止</button>
-          <button class="btn ghost" id="mzGyroZero" type="button">标定为「完全合上」</button>
-          <button class="btn ghost" id="mzGyroMount" type="button">贴法：屏幕背面</button>
-        </div>
-        <p class="note" id="mzGyroTip">
-          把手机竖着贴（或用皮筋绑）在 MacBook 屏幕上、手机顶部朝屏幕顶边，点「启用陀螺仪」并允许
-          「运动与方向访问」，姿态角就会实时换算成屏幕开合角。首次使用请先合上屏幕点一次「标定为完全合上」。
-        </p>
-
-        <div class="mz-actions" style="margin-top:18px">
-          <button class="btn ghost" id="mzBack" type="button">← 返回配对页</button>
-        </div>
-      </div>
     </section>
 
     <!-- 安装 -->
@@ -575,14 +543,9 @@
   function downTopic() { return 'mackz/' + code + '/down'; }
 
   function setPill(text, cls) {
-    // 配对页与控制中心各有一个状态标签，两处同步更新
-    var ids = ['mzPill', 'mzPill2'], i, el;
-    for (i = 0; i < ids.length; i++) {
-      el = $(ids[i]);
-      if (!el) { continue; }
-      el.textContent = text;
-      el.className = 'mz-pill' + (cls ? ' ' + cls : '');
-    }
+    var el = $('mzPill');
+    el.textContent = text;
+    el.className = 'mz-pill' + (cls ? ' ' + cls : '');
   }
 
   // 二维码内容就是本页地址（带上连接码），手机扫一下即可打开本页并自动配对
@@ -598,31 +561,21 @@
     img.src = 'https://api.qrserver.com/v1/create-qr-code/?size=260x260&margin=0&data=' + encoded;
   }
 
-  function send(msg) { if (client) { client.publish(JSON.stringify(msg)); } }
-
   function connect() {
     if (client) { client.close(); client = null; }
     setPill('连接中…', 'warn');
     client = mqttConnect('mackz-web-' + Math.random().toString(36).slice(2, 9), downTopic(), upTopic(), {
       onStatus: function (st) {
-        if (st === 'connected') { setPill('已连接', 'ok'); applyProgress(lastProgress); }
+        if (st === 'connected') { setPill('已连接', 'ok'); }
         else if (st === 'closed' || st === 'error') { setPill('已断开，5 秒后重连', 'warn'); }
       },
       onMessage: function (text) {
         var obj = null;
         try { obj = JSON.parse(text); } catch (e) { return; }
-        if (typeof obj.p === 'number') { applyProgress(obj.p); }
+        if (typeof obj.p === 'number') { $('mzProgress').textContent = Math.round(obj.p * 100) + '%'; }
         if (typeof obj.g === 'number') { $('mzAngle').textContent = obj.g.toFixed(1) + '°'; }
       }
     });
-  }
-
-  var lastProgress = 0, sliderLock = 0;
-  function applyProgress(p) {
-    lastProgress = p;
-    $('mzProgress').textContent = Math.round(p * 100) + '%';
-    // 用户正在拖滑块时不要被回传值抢走控制
-    if (Date.now() > sliderLock) { $('mzSlider').value = Math.round(p * 100); }
   }
 
   // 配对区块在长页面靠下的位置，配对/进控制中心后直接滚过去，
@@ -635,35 +588,22 @@
   function showPaired(value) {
     code = value;
     $('mzCodeBig').textContent = code;
-    $('mzCenterCode').textContent = code;
     $('mzSetup').hidden = true;
     $('mzPaired').hidden = false;
-    $('mzCenter').hidden = true;
     try { history.replaceState(null, '', '#c=' + code); } catch (e) {}
     renderQR();
     connect();
     scrollToRemote();
   }
 
-  // 「进入控制中心」：配对页只留这一个入口，点进来才是那套遥控界面
+  // 「进入控制中心」：跳到独立的控制页（那一页就是原来做好的手机控制器）
   function enterCenter() {
-    $('mzPaired').hidden = true;
-    $('mzCenter').hidden = false;
-    scrollToRemote();
-  }
-
-  // 返回配对页（连接保持不断开）
-  function backToPair() {
-    $('mzCenter').hidden = true;
-    $('mzPaired').hidden = false;
-    scrollToRemote();
+    if (code) { location.href = 'mackz-control.html#c=' + code; }
   }
 
   function unpair() {
     if (client) { client.close(); client = null; }
-    stopGyro();
     $('mzPaired').hidden = true;
-    $('mzCenter').hidden = true;
     $('mzSetup').hidden = false;
     $('mzErr').textContent = '';
     $('mzCode').value = '';
@@ -672,7 +612,6 @@
   }
 
   $('mzEnter').onclick = enterCenter;
-  $('mzBack').onclick = backToPair;
 
   $('mzPair').onclick = function () {
     var v = normalize($('mzCode').value);
@@ -683,103 +622,7 @@
   $('mzCode').addEventListener('keydown', function (e) { if (e.key === 'Enter') { $('mzPair').click(); } });
   $('mzUnpair').onclick = unpair;
 
-  /* ---------- 遥控按钮与滑块 ---------- */
-  $('mzClose').onclick = function () { send({ a: 'close' }); applyProgress(1); };
-  $('mzOpen').onclick = function () { send({ a: 'open' }); applyProgress(0); };
-  $('mzPlay').onclick = function () { send({ a: 'play' }); };
-  $('mzReset').onclick = function () { send({ a: 'open' }); applyProgress(0); };
-  $('mzSlider').oninput = function () {
-    sliderLock = Date.now() + 1200;
-    var v = Number($('mzSlider').value);
-    applyProgress(v / 100);
-    send({ a: 'progress', v: v / 100 });
-  };
-
-  /* ---------- 陀螺仪：屏幕法线绕铰链轴旋转，重力在手机 y/z 轴上的投影直接解出开合角 ---------- */
-  var gyroMount = localStorage.getItem('mackzMount') || 'back';
-  var gyroZero = parseFloat(localStorage.getItem('mackzZero') || '0') || 0;
-  var gyroLastLid = null, gyroLastSend = 0, gyroOn = false;
-
-  function refreshMountLabel() {
-    $('mzGyroMount').textContent = '贴法：' + (gyroMount === 'back' ? '屏幕背面' : '屏幕正面');
-  }
-  refreshMountLabel();
-
-  function lidAngleFrom(g) {
-    var raw = Math.atan2(-g.y, g.z) * 180 / Math.PI;
-    raw = ((raw % 360) + 360) % 360;                     // 归一化，避开 ±180° 附近的跳变
-    var lid = gyroMount === 'back' ? 180 - raw : (raw > 180 ? 360 - raw : raw);
-    return Math.min(Math.max(lid, 0), 180);
-  }
-
-  function onMotion(e) {
-    var g = e.accelerationIncludingGravity;
-    if (!g || g.y === null || g.z === null) { return; }
-    gyroLastLid = lidAngleFrom(g);
-    var angle = Math.max(0, gyroLastLid - gyroZero);
-    $('mzGyroAngle').textContent = Math.round(angle) + '°';
-    var now = Date.now();
-    if (now - gyroLastSend < 50) { return; }             // 限流到 20Hz
-    gyroLastSend = now;
-    send({ h: Number(angle.toFixed(2)) });
-  }
-
-  function startGyro() {
-    window.addEventListener('devicemotion', onMotion, true);
-    gyroOn = true;
-    $('mzGyroState').textContent = '接管中';
-    $('mzGyroState').className = 'mz-pill ok';
-    $('mzGyroTip').textContent = '保持本页在前台：切到后台或锁屏会暂停上报，Mac 会自动交回本机传感器。';
-  }
-  function stopGyro() {
-    window.removeEventListener('devicemotion', onMotion, true);
-    gyroOn = false;
-    $('mzGyroState').textContent = '已停止';
-    $('mzGyroState').className = 'mz-pill';
-    $('mzGyroAngle').textContent = '--°';
-    $('mzGyroTip').textContent = '已停止上报，Mac 会在 1.5 秒内交回本机传感器。';
-  }
-
-  $('mzGyroStart').onclick = function () {
-    if (!window.isSecureContext) {
-      $('mzGyroTip').textContent = '当前页面不是 https，浏览器不允许读取运动传感器。请用 kdxzhx.top 的 https 地址打开本页。';
-      return;
-    }
-    if (!window.DeviceMotionEvent) {
-      $('mzGyroTip').textContent = '这个浏览器不支持运动传感器（DeviceMotion）。';
-      return;
-    }
-    if (typeof window.DeviceMotionEvent.requestPermission === 'function') {
-      // iOS 13+ 必须在用户手势里申请权限
-      window.DeviceMotionEvent.requestPermission().then(function (res) {
-        if (res === 'granted') { startGyro(); }
-        else { $('mzGyroTip').textContent = '未授权：请在 iOS「设置 → Safari → 运动与方向访问」中打开，再重新点「启用陀螺仪」。'; }
-      }).catch(function () {
-        $('mzGyroTip').textContent = '申请权限失败：必须用 https 打开，且要由点击按钮触发。';
-      });
-    } else {
-      startGyro();
-    }
-  };
-  $('mzGyroStop').onclick = stopGyro;
-  $('mzGyroZero').onclick = function () {
-    if (gyroLastLid === null) { $('mzGyroTip').textContent = '先点「启用陀螺仪」，等角度显示出来再标定。'; return; }
-    gyroZero = gyroLastLid;                              // 当前姿态记为 0°（完全合上）
-    localStorage.setItem('mackzZero', String(gyroZero));
-    $('mzGyroTip').textContent = '已把当前姿态标定为 0°。掀开屏幕，数值应从 0° 开始变大。';
-  };
-  $('mzGyroMount').onclick = function () {
-    gyroMount = gyroMount === 'back' ? 'front' : 'back';
-    localStorage.setItem('mackzMount', gyroMount);
-    refreshGyroMount();
-  };
-  function refreshGyroMount() {
-    refreshMountLabel();
-    gyroZero = 0;
-    localStorage.setItem('mackzZero', '0');
-    $('mzGyroTip').textContent = '已切换贴法并清除标定：请合上 MacBook 后重新点「标定为完全合上」。';
-  }
-
+  /* 遥控按钮、进度滑块与陀螺仪都搬到了独立的控制页 mackz-control.html */
   /* ---------- 入口：带 #c= 直接配对；否则等用户输入 ---------- */
   function fromHash() {
     var h = location.hash || '';
