@@ -58,6 +58,15 @@ final class HingeAnimationEngine {
     private var catchUpRate: Double = 0          // 进度/秒
     private static let tick = 1.0 / 60.0
 
+    // 跟随追帧：把目标进度按时间常数以 60Hz 缓动逼近。
+    // 手机陀螺仪上报只有 ~50Hz（甚至更低），直接赋值会让画面「一顿一顿」，改成缓动后与输入频率无关。
+    private var followTimer: DispatchSourceTimer?
+    private var followTarget: Double = 0
+    /// 当前是否由手机陀螺仪驱动：手机贴在屏幕上时，中途停顿不代表用户「合到底」，所以不做停顿补完
+    private var phoneDriven = false
+    /// 跟随缓动的时间常数（秒）：越大越顺滑、越小越跟手
+    private static let followTau = 0.09
+
     private var lastEmitted: HingeRenderState?
 
     init(config: Config) {
@@ -74,6 +83,9 @@ final class HingeAnimationEngine {
     /// 清空全部状态并隐藏覆盖层
     func reset() {
         cancelCatchUp()
+        stopFollowTick()
+        followTarget = 0
+        phoneDriven = false
         demoTimer?.invalidate()
         demoTimer = nil
         phase = .idle
@@ -108,9 +120,10 @@ final class HingeAnimationEngine {
 
     // MARK: - 主输入：角度采样（主线程调用）
 
-    func update(angle: Double, timestamp: Double) {
+    func update(angle: Double, timestamp: Double, fromPhone: Bool = false) {
         guard config.enabled else { return }
         guard angle.isFinite else { return }
+        phoneDriven = fromPhone
 
         // 方向反转与合法区间钳制（传感器理论输出 0~360）
         let raw = config.invertAngle ? (180 - angle) : angle
@@ -124,10 +137,17 @@ final class HingeAnimationEngine {
             pendingDelta = 0
         }
 
-        // 传感器已在采样端做了上报节流，这里只做一次轻量指数平滑抑制抖动
+        // 传感器已在采样端做了上报节流，这里只做一次轻量指数平滑抑制抖动。
+        // 手机上报频率低（~50Hz），改用「时间常数式」平滑 —— 系数随采样间隔变化，快慢输入观感一致。
         let value: Double
         if config.smoothing > 0, let prev = smoothedAngle {
-            value = prev + (clamped - prev) * config.smoothing
+            if fromPhone, lastSampleTime > 0 {
+                let dt = min(max(timestamp - lastSampleTime, 0.004), 0.2)
+                let tau = 0.010 / max(config.smoothing, 0.05)
+                value = prev + (clamped - prev) * (1 - exp(-dt / tau))
+            } else {
+                value = prev + (clamped - prev) * config.smoothing
+            }
         } else {
             value = clamped
         }
@@ -165,15 +185,11 @@ final class HingeAnimationEngine {
             phase = .tracking
         }
 
-        // 跟随模式：进度贴着角度走（1:1）。
-        // 与显示进度相差过大时（例如加速补完后再反向，或手动预览跳变）先用一小段平滑追赶，避免画面瞬跳。
+        // 跟随模式：进度贴着角度走（1:1），但由 60Hz 的追帧缓动实现，
+        // 这样低频输入也不会一跳一跳；追上目标后追帧自动停下，静止时零开销。
         if phase == .tracking, !holdingFold {
-            let delta = follow - progress
-            if abs(delta) <= 0.25 {
-                progress = follow
-            } else {
-                progress += delta * 0.18
-            }
+            followTarget = follow
+            startFollowTick()
         }
 
         // 跟随过程中到达端点：序列自然结束
@@ -183,13 +199,51 @@ final class HingeAnimationEngine {
             return
         }
 
-        // 停顿判定：角度静止超过设定时长 → 加速播完剩余片段
-        if phase == .tracking, let target = sequenceTarget,
+        // 停顿判定：角度静止超过设定时长 → 加速播完剩余片段。
+        // 手机陀螺仪开车时不做这一套：手机贴在屏幕上中途停一下很正常，
+        // 之前会因此在「才合上一点点」时就把动画补到底（用户反馈的「还没关上动画就结束了」）。
+        if phase == .tracking, !phoneDriven, let target = sequenceTarget,
            timestamp - lastMoveTime >= Double(config.stallDurationMs) / 1000.0 {
             startCatchUp(to: target)
         }
 
         emit()
+    }
+
+    // MARK: - 跟随追帧
+
+    /// 启动 60Hz 追帧（已在跑就复用）
+    private func startFollowTick() {
+        guard followTimer == nil else { return }
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        timer.schedule(deadline: .now(), repeating: Self.tick, leeway: .milliseconds(2))
+        timer.setEventHandler { [weak self] in self?.tickFollow() }
+        followTimer = timer
+        timer.resume()
+    }
+
+    /// 把进度按时间常数缓动逼近目标；追上即停，避免空闲时白跑
+    private func tickFollow() {
+        guard phase == .tracking, !holdingFold else {
+            stopFollowTick()
+            return
+        }
+        let diff = followTarget - progress
+        if abs(diff) < 0.0008 {
+            if progress != followTarget {
+                progress = followTarget
+                emit()
+            }
+            stopFollowTick()
+            return
+        }
+        progress += diff * (1 - exp(-Self.tick / Self.followTau))
+        emit()
+    }
+
+    private func stopFollowTick() {
+        followTimer?.cancel()
+        followTimer = nil
     }
 
     // MARK: - 加速补完

@@ -238,7 +238,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSLog("[MacKZ] 手机陀螺仪开始接管铰链角度")
         }
         phoneHingeDeadline = now + 1.5
-        engine.update(angle: hinge, timestamp: now)
+        engine.update(angle: hinge, timestamp: now, fromPhone: true)
         startPhoneHingeWatchdog()
     }
 

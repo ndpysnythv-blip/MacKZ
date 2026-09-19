@@ -298,7 +298,7 @@
     gyroLastLid = lidAngleFrom(g);
     $('gyroAngle').textContent = Math.round(gyroLastLid) + '°';
     var now = Date.now();
-    if (now - gyroLastSend < 50) { return; }             // 限流到 20Hz
+    if (now - gyroLastSend < 20) { return; }             // 限流到 50Hz：上报密一点，画面才跟手
     gyroLastSend = now;
     send({ h: Number(gyroLastLid.toFixed(2)) });
   }
