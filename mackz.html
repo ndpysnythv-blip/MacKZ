@@ -1,0 +1,517 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MacKZ · MacBook 折叠屏开合动画 | KDXZHX</title>
+<meta name="description" content="MacKZ：读取 MacBook 屏幕铰链角度，在 macOS 原生桌面上叠加 iPhone Duo 风格的折叠过渡动画。全局覆盖、可启停、支持手机遥控。作者 KDXZHX。">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  :root {
+    --c1: #667eea;
+    --c2: #764ba2;
+    --ink: #1e2233;
+    --muted: #6b7280;
+    --line: #e8eaf2;
+  }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'PingFang SC', 'Helvetica Neue', Arial, sans-serif;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    min-height: 100vh;
+    color: var(--ink);
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: inherit; }
+  .wrap { max-width: 1040px; margin: 0 auto; padding: 0 20px; }
+
+  /* 顶部导航 */
+  nav {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 18px 0; color: #fff;
+  }
+  nav .brand { font-weight: 800; letter-spacing: .5px; font-size: 1.05rem; }
+  nav .links { display: flex; gap: 18px; font-size: .92rem; }
+  nav .links a { color: rgba(255,255,255,.9); text-decoration: none; }
+  nav .links a:hover { color: #fff; text-decoration: underline; }
+
+  /* Hero */
+  header.hero {
+    text-align: center; color: #fff; padding: 46px 0 64px;
+  }
+  .logo {
+    width: 104px; height: 104px; border-radius: 28px; object-fit: cover;
+    box-shadow: 0 14px 40px rgba(0,0,0,.28);
+    background: linear-gradient(135deg, #fff, #e9ecff);
+  }
+  .logo-fallback {
+    width: 104px; height: 104px; border-radius: 28px; margin: 0 auto;
+    display: none; align-items: center; justify-content: center;
+    font-size: 2.4rem; font-weight: 900; color: #5b63d3;
+    background: linear-gradient(135deg, #fff, #e9ecff);
+    box-shadow: 0 14px 40px rgba(0,0,0,.28);
+  }
+  header.hero h1 {
+    font-size: 3rem; font-weight: 900; margin: 22px 0 10px; letter-spacing: 1px;
+    text-shadow: 0 4px 30px rgba(0,0,0,.18);
+  }
+  header.hero .tagline { font-size: 1.12rem; color: rgba(255,255,255,.94); line-height: 1.8; }
+  .badges { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; margin: 22px 0 4px; }
+  .badge {
+    font-size: .8rem; padding: 6px 14px; border-radius: 999px;
+    background: rgba(255,255,255,.18); border: 1px solid rgba(255,255,255,.35);
+    color: #fff; backdrop-filter: blur(6px);
+  }
+  .cta { display: flex; flex-wrap: wrap; gap: 14px; justify-content: center; margin-top: 30px; }
+  .btn {
+    display: inline-block; padding: 14px 32px; border-radius: 50px; font-weight: 700; font-size: .98rem;
+    text-decoration: none; transition: all .25s ease; border: 0; cursor: pointer;
+  }
+  .btn.primary { background: #fff; color: #5b63d3; box-shadow: 0 10px 28px rgba(0,0,0,.22); }
+  .btn.primary:hover { transform: translateY(-2px) scale(1.03); }
+  .btn.ghost { background: rgba(255,255,255,.16); color: #fff; border: 1px solid rgba(255,255,255,.5); }
+  .btn.ghost:hover { background: rgba(255,255,255,.28); }
+
+  /* 主体卡片 */
+  main { padding-bottom: 70px; }
+  section.card {
+    background: #fff; border-radius: 24px; padding: 38px 34px; margin-bottom: 26px;
+    box-shadow: 0 12px 40px rgba(0,0,0,.14);
+  }
+  section.card h2 {
+    font-size: 1.5rem; font-weight: 800; margin-bottom: 16px;
+    display: flex; align-items: center; gap: 10px;
+  }
+  section.card h2::before {
+    content: ''; width: 5px; height: 22px; border-radius: 3px;
+    background: linear-gradient(180deg, var(--c1), var(--c2));
+  }
+  section.card h3 { font-size: 1.04rem; font-weight: 700; margin: 22px 0 8px; }
+  section.card p { color: #444a5c; line-height: 1.9; margin-bottom: 10px; }
+  section.card ul { margin: 8px 0 8px 20px; color: #444a5c; line-height: 1.95; }
+  section.card li { margin-bottom: 4px; }
+  .lead { font-size: 1.02rem; }
+  .hl { color: #5b63d3; font-weight: 700; }
+
+  /* 特性网格 */
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 18px; margin-top: 12px; }
+  .feat { border: 1px solid var(--line); border-radius: 16px; padding: 20px 18px; background: #fbfbff; }
+  .feat .ico { font-size: 1.6rem; margin-bottom: 8px; }
+  .feat h4 { font-size: 1rem; margin-bottom: 6px; }
+  .feat p { font-size: .9rem; color: var(--muted); line-height: 1.75; margin: 0; }
+
+  /* 终端命令 */
+  .term {
+    position: relative; background: #0d1117; border-radius: 14px; padding: 18px 16px 18px 18px;
+    margin: 14px 0 6px; overflow-x: auto;
+  }
+  .term code {
+    color: #e6edf3; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: .88rem; line-height: 1.7; white-space: pre; display: block;
+  }
+  .term .copy {
+    position: absolute; top: 10px; right: 10px; font-size: .76rem; padding: 5px 12px;
+    border-radius: 8px; border: 1px solid #30363d; background: #161b22; color: #c9d1d9; cursor: pointer;
+  }
+  .term .copy:hover { background: #21262d; color: #fff; }
+  .note { font-size: .86rem; color: var(--muted); line-height: 1.8; }
+
+  /* 步骤 */
+  ol.steps { list-style: none; counter-reset: s; margin-top: 10px; }
+  ol.steps > li {
+    counter-increment: s; position: relative; padding: 0 0 20px 46px; line-height: 1.85; color: #444a5c;
+  }
+  ol.steps > li::before {
+    content: counter(s); position: absolute; left: 0; top: 2px;
+    width: 30px; height: 30px; border-radius: 50%;
+    background: linear-gradient(135deg, var(--c1), var(--c2)); color: #fff;
+    font-size: .9rem; font-weight: 700; display: flex; align-items: center; justify-content: center;
+  }
+  ol.steps > li b { color: var(--ink); }
+
+  /* FAQ */
+  details {
+    border: 1px solid var(--line); border-radius: 14px; padding: 14px 18px; margin-bottom: 10px; background: #fbfbff;
+  }
+  details[open] { background: #fff; }
+  details summary { cursor: pointer; font-weight: 600; font-size: .97rem; list-style: none; }
+  details summary::-webkit-details-marker { display: none; }
+  details summary::before { content: '＋ '; color: var(--c2); font-weight: 800; }
+  details[open] summary::before { content: '－ '; }
+  details p, details ul { margin-top: 10px; font-size: .92rem; color: #52596b; }
+
+  table { width: 100%; border-collapse: collapse; margin-top: 12px; font-size: .9rem; }
+  th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+  th { color: var(--muted); font-weight: 600; background: #fafbff; }
+  td code { background: #f1f3fb; padding: 2px 6px; border-radius: 6px; font-size: .84rem; }
+
+  footer { text-align: center; color: rgba(255,255,255,.85); padding: 10px 0 46px; font-size: .9rem; line-height: 1.9; }
+  footer a { color: #fff; }
+
+  @media (max-width: 640px) {
+    header.hero h1 { font-size: 2.1rem; }
+    section.card { padding: 26px 20px; border-radius: 18px; }
+    .logo, .logo-fallback { width: 84px; height: 84px; border-radius: 22px; }
+  }
+  /* ---------- 手机遥控配对（内联区块） ---------- */
+  .mz-label { display: block; font-size: .82rem; font-weight: 600; color: var(--muted); margin: 16px 0 7px; }
+  .mz-input {
+    width: 100%; padding: 13px 14px; font-size: 1rem;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    border: 1.5px solid var(--line); border-radius: 12px; outline: none; background: #f8f9fc; color: var(--ink);
+  }
+  .mz-input:focus { border-color: var(--c1); background: #fff; }
+  .mz-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 14px; }
+  .mz-btn { width: auto; min-width: 150px; text-align: center; }
+  .mz-err { font-size: .82rem; color: #dc2626; min-height: 1.1em; margin-top: 10px; }
+  .mz-row { display: flex; align-items: center; justify-content: space-between; font-size: .82rem; color: var(--muted); margin-top: 14px; }
+  .mz-pill { font-size: .72rem; padding: 3px 10px; border-radius: 999px; background: #eaf7ef; border: 1px solid #bfe6cd; color: #16794a; }
+  .mz-code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 1.05rem; font-weight: 700;
+    letter-spacing: .3px; word-break: break-all; text-align: center; color: #2b3350;
+    background: #f4f6fc; border: 1.5px dashed #cfd6ea; border-radius: 12px; padding: 14px; margin: 10px 0 16px;
+  }
+  .mz-qrbox {
+    width: 220px; height: 220px; margin: 0 auto; padding: 12px; background: #fff;
+    border: 1.5px solid var(--line); border-radius: 14px;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .mz-qrbox img { width: 100%; height: 100%; display: block; }
+  @media (max-width: 520px) { .mz-qrbox { width: 188px; height: 188px; } .mz-btn { width: 100%; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <nav>
+    <div class="brand">KDXZHX</div>
+    <div class="links">
+      <a href="/">应用集合</a>
+      <a href="#remote">手机遥控</a>
+      <a href="#install">安装</a>
+      <a href="#faq">常见问题</a>
+      <a href="https://github.com/ndpysnythv-blip/MacKZ" target="_blank" rel="noopener">GitHub</a>
+    </div>
+  </nav>
+
+  <header class="hero">
+    <img class="logo" alt="MacKZ"
+         src="https://cdn.jsdelivr.net/gh/ndpysnythv-blip/MacKZ@main/Resources/logo.jpg"
+         onerror="this.style.display='none';document.getElementById('logoFallback').style.display='flex';">
+    <div class="logo-fallback" id="logoFallback">KZ</div>
+    <h1>MacKZ</h1>
+    <p class="tagline">
+      合上 MacBook 的屏幕，桌面就像 iPhone Duo 那样被折叠着收走。<br>
+      读取真实铰链角度 · 全局实时叠加 · 低性能占用 · 不吃鼠标和窗口操作
+    </p>
+    <div class="badges">
+      <span class="badge">作者 KDXZHX</span>
+      <span class="badge">macOS 14+ / Apple Silicon</span>
+      <span class="badge">开源免费</span>
+      <span class="badge">v1.7.0</span>
+    </div>
+    <div class="cta">
+      <a class="btn primary" href="#install">一键安装</a>
+      <a class="btn ghost" href="https://github.com/ndpysnythv-blip/MacKZ/releases/latest" target="_blank" rel="noopener">下载最新版</a>
+    </div>
+  </header>
+
+  <main>
+    <!-- 这是什么 -->
+    <section class="card">
+      <h2>MacKZ 是什么</h2>
+      <p class="lead">
+        MacKZ 是一个常驻菜单栏的 macOS 小工具。它会实时读取 MacBook 屏幕转轴的
+        <span class="hl">开合角度</span>，把你当前的桌面画面当成一块玻璃，
+        沿着屏幕边缘一路“折”下去——就像 iPhone Duo 折叠屏合上时的那段过渡动画。
+      </p>
+      <p>
+        它不是手机模型，也不是一段假动画：画面里被折叠的内容就是你的真实桌面，
+        所以 Dock、窗口、壁纸都会跟着一起翻折，合到哪一步、动画就停在哪一步。
+      </p>
+      <h3>它是怎么做到的</h3>
+      <ul>
+        <li><b>读角度</b>：通过 IOKit HID 读取 Apple 内置的 Lid Angle Sensor（<code>vendor 0x05AC / product 0x8104</code>），并把上报间隔压到 8 ms，角度变化几乎无延迟。</li>
+        <li><b>抓桌面</b>：用 ScreenCaptureKit 以零拷贝方式（IOSurface → Metal 纹理）拿到当前屏幕画面，不占 CPU 解码。</li>
+        <li><b>折画面</b>：四趟 Metal 渲染管线完成重投影 —— 射线投射还原折叠几何 → 横向高斯模糊 → 纵向高斯模糊 → 径向色散，做出玻璃的厚度、模糊与棱镜感。</li>
+        <li><b>智能补完</b>：跟随角度实时同步；一旦你停住不动，它会自动加速把剩余片段播完；再次反向移动则立刻取消加速、继续跟随。</li>
+      </ul>
+    </section>
+
+    <!-- 特性 -->
+    <section class="card">
+      <h2>核心特性</h2>
+      <div class="grid">
+        <div class="feat"><div class="ico">🎛️</div><h4>真实角度跟随</h4><p>动画进度 = 铰链角度映射，0% 完全展开、100% 折上，逐度同步不做插值糊弄。</p></div>
+        <div class="feat"><div class="ico">⚡️</div><h4>停顿自动补完</h4><p>停在半路会自动加速播完剩余片段；一反向就取消加速，不会抢你的操作。</p></div>
+        <div class="feat"><div class="ico">🖥️</div><h4>全局覆盖</h4><p>覆盖在所有窗口之上且跨全部空间，全屏 App 里也照常生效。</p></div>
+        <div class="feat"><div class="ico">🪶</div><h4>低性能占用</h4><p>有变化才渲染、静止即暂停采集；可调采集帧率与渲染分辨率。</p></div>
+        <div class="feat"><div class="ico">🖱️</div><h4>不干扰系统</h4><p>覆盖层不接收鼠标事件，点击、拖窗、手势全部照常。</p></div>
+        <div class="feat"><div class="ico">🔀</div><h4>方向可切换</h4><p>默认为「向下收」（内容折向屏幕下方），也可切回参考实现的向上收。</p></div>
+        <div class="feat"><div class="ico">🎚️</div><h4>手动预览</h4><p>没有角度传感器的机型也能用滑杆和「模拟合上 / 模拟打开」按钮体验完整动画。</p></div>
+        <div class="feat"><div class="ico">📱</div><h4>手机遥控</h4><p>手机连同一个 Wi-Fi 就能远程控制折叠动画，演示给别人看非常方便。</p></div>
+        <div class="feat"><div class="ico">🔄</div><h4>自动更新</h4><p>发现新版本自动弹窗提示，一键下载、替换并重启。</p></div>
+      </div>
+    </section>
+
+    <!-- 手机遥控配对 -->
+    <section class="card" id="remote">
+      <h2>手机遥控配对</h2>
+      <p class="lead">
+        手机和 Mac 连同一个 Wi-Fi，就能用手机当遥控器：合上 / 打开 / 播放一次开合 / 拖动进度。
+        下面这串<span class="hl">连接码</span>由 Mac 端实时生成，手机在本页输入即可配对。
+      </p>
+
+      <!-- 未配对 -->
+      <div id="mzSetup">
+        <label class="mz-label" for="mzCode">连接码</label>
+        <input id="mzCode" class="mz-input" type="text" autocomplete="off" autocapitalize="off"
+               spellcheck="false" placeholder="192.168.1.5:52800#836291">
+        <div class="mz-actions">
+          <button class="btn primary mz-btn" id="mzPair" type="button">配对</button>
+        </div>
+        <p class="mz-err" id="mzErr"></p>
+        <p class="note">
+          连接码在 Mac 的「MacKZ 设置 → 手机遥控」里，点 <b>复制连接码</b> 后粘到这里即可；<br>
+          也可以直接粘整串（形如 <b>192.168.1.5:52800#836291</b>）。手机与 Mac 必须在同一个 Wi-Fi。
+        </p>
+      </div>
+
+      <!-- 已配对 -->
+      <div id="mzPaired" hidden>
+        <div class="mz-row"><span>已配对 · 连接码</span><span class="mz-pill">就绪</span></div>
+        <div class="mz-code" id="mzCodeBig"></div>
+        <div class="mz-qrbox"><img id="mzQr" alt="配对二维码"></div>
+        <div class="mz-actions">
+          <a class="btn primary mz-btn" id="mzGo" href="#">在手机上打开控制页</a>
+          <button class="btn ghost mz-btn" id="mzReset" type="button">换一个连接码</button>
+        </div>
+        <p class="note">
+          二维码里就是 Mac 的局域网控制页地址，用手机相机扫一下直达；<br>
+          点按钮没反应时，多半是浏览器开着「仅限 HTTPS」，到「设置 → Safari → 高级」里关掉即可。
+        </p>
+      </div>
+    </section>
+
+    <!-- 安装 -->
+    <section class="card" id="install">
+      <h2>安装（终端一键）</h2>
+      <p>打开「终端」，粘贴下面这行命令回车即可。
+        <b>不需要</b>在浏览器里下载、<b>不需要</b>处理“不受信任的开发者”提示：
+        脚本会在你本机拉源码、本机编译、本机签名，产物天生带信任。</p>
+      <div class="term">
+        <button class="copy" onclick="copyCmd(this)">复制</button>
+        <code id="cmd">curl -fsSL https://raw.githubusercontent.com/ndpysnythv-blip/MacKZ/main/scripts/install-raw.sh | bash</code>
+      </div>
+      <p class="note">
+        脚本会自动做这些事：检查 Xcode 命令行工具 → 优先整包下载源码（失败则逐文件回退，内置多个镜像并带超时保护）
+        → 编译出 MacKZ.app → 装入「应用程序」→ 配置开机自启 → 启动，并顺带清理更新后残留的旧授权记录。
+      </p>
+
+      <h3>如果你更想手动下载</h3>
+      <p class="note">
+        前往 <a href="https://github.com/ndpysnythv-blip/MacKZ/releases/latest" target="_blank" rel="noopener">Releases</a>
+        下载 <code>MacKZ.zip</code>，解压后拖进「应用程序」。浏览器下载的文件会带隔离属性，第一次打开前执行：
+      </p>
+      <div class="term">
+        <button class="copy" onclick="copyCmd(this)">复制</button>
+        <code>sudo xattr -cr /Applications/MacKZ.app &amp;&amp; sudo codesign --force --deep --sign - /Applications/MacKZ.app &amp;&amp; open /Applications/MacKZ.app</code>
+      </div>
+
+      <h3>环境要求</h3>
+      <table>
+        <tr><th>项目</th><th>要求</th></tr>
+        <tr><td>系统</td><td>macOS 14.0 Sonoma 及以上</td></tr>
+        <tr><td>芯片</td><td>Apple Silicon（M 系列）。Intel 机型无铰链传感器，只能使用手动预览</td></tr>
+        <tr><td>依赖</td><td>Xcode Command Line Tools（脚本会引导安装，无需完整 Xcode）</td></tr>
+        <tr><td>权限</td><td>「屏幕录制」（用于把真实桌面折起来）</td></tr>
+      </table>
+    </section>
+
+    <!-- 使用 -->
+    <section class="card">
+      <h2>使用步骤</h2>
+      <ol class="steps">
+        <li><b>装好后菜单栏出现 MacKZ logo 图标</b>，说明插件已经跑起来了。</li>
+        <li><b>授权「屏幕录制」</b>：首次启动会自动弹窗申请，同意后程序会自动重启生效。
+          若系统设置里明明勾着却仍显示未授权（更新后常见），点设置里的「修复权限」清掉过期记录再授权一次。</li>
+        <li><b>慢慢合上屏幕</b>：角度进入「开始折叠角」（默认 90°）之后，桌面就开始被折下去；合到底动画完整结束。</li>
+        <li><b>中途停住</b>：状态机会自动加速把剩余片段补完；一旦反向抬起，加速立刻取消，重新跟随你的手。</li>
+        <li><b>想让开盖也看得到</b>：打开设置里的「合盖不休眠」，否则合盖即休眠、动画发生在锁屏之下，等于白做。</li>
+      </ol>
+    </section>
+
+    <!-- 手机遥控 -->
+    <section class="card">
+      <h2>手机遥控（演示用）</h2>
+      <p>设置面板的「手机遥控」里会显示一个局域网地址。手机连同一个 Wi-Fi，用浏览器打开它，就能远距离控制折叠动画：</p>
+      <ul>
+        <li>「合上」「打开」——播放一次完整的折叠 / 展开动画</li>
+        <li>「播放一次开合」——自动演一遍</li>
+        <li>进度滑块——实时拖动折叠程度</li>
+      </ul>
+      <p class="note">地址里的 <code>t=xxxx</code> 是每次启动随机生成的口令，只在局域网内有效，重启插件后自动更换；关掉开关即完全停止监听。</p>
+    </section>
+
+    <!-- FAQ -->
+    <section class="card" id="faq">
+      <h2>常见问题</h2>
+      <details open><summary>菜单栏有图标，屏幕上却没有动画？</summary>
+        <p>九成是「屏幕录制」权限没生效。MacKZ 用的是本地临时签名，每次更新后签名都会变，系统里保留的仍是上一版的授权记录，于是出现“设置里勾着、程序说没授权”。请在设置面板点「修复权限」，再点「申请授权」，然后按提示重启 MacKZ。</p>
+      </details>
+      <details><summary>铰链角度一直显示 0°？</summary>
+        <p>说明系统没有暴露 Lid Angle Sensor。Apple Silicon 的 MacBook 基本都有；Intel 机型或部分特殊机型没有，此时插件会自动切换为「开盖唤醒 / 合盖睡眠」触发，你也可以在设置里用「手动预览」的滑块和按钮完整体验动画。</p>
+      </details>
+      <details><summary>合上屏幕后电脑休眠，开盖要输密码，动画根本看不到？</summary>
+        <p>设置面板 →「合盖与休眠」→ 点「开启合盖不休眠」（需要一次性管理员授权）。合盖后系统继续运行、显示器照常关闭，开盖不会再因休眠弹锁屏。若仍要求输密码，那是「锁定屏幕」策略，点旁边的「打开「锁定屏幕」设置」，把「关闭显示器后需要密码」改为「永不」。<br>注意：合盖状态下机器仍在耗电、不散热，放进包里前请点「恢复系统默认」。</p>
+      </details>
+      <details><summary>浏览器下载后提示“未受信任”打不开？</summary>
+        <p>这是 macOS 对浏览器下载文件的隔离策略。推荐直接用上面的终端一键安装（本机编译，不带隔离属性）；如果已经下载了 zip，按安装区里那条 <code>xattr</code> + <code>codesign</code> 命令处理一下即可。</p>
+      </details>
+      <details><summary>会不会影响我正常用电脑？</summary>
+        <p>不会。覆盖层不接收鼠标事件，点击、拖动窗口、触控板手势全部照常；渲染是「有变化才画、静止就停」，空闲时几乎不占资源。菜单栏里也能随时一键停用。</p>
+      </details>
+      <details><summary>动画方向感觉反了？</summary>
+        <p>设置面板 →「常用设置」→「折叠方向」可以在「向下收」和「向上收」之间切换，改动即时生效。</p>
+      </details>
+    </section>
+
+    <!-- 更新与卸载 -->
+    <section class="card">
+      <h2>更新 · 卸载 · 反馈</h2>
+      <h3>更新</h3>
+      <p>菜单栏图标 →「检查更新…」，发现新版本会自动弹窗，点「立即更新并重启」即可。
+        也可以重新执行一次上面那条终端安装命令，效果相同。</p>
+      <h3>卸载</h3>
+      <div class="term">
+        <button class="copy" onclick="copyCmd(this)">复制</button>
+        <code>rm -rf /Applications/MacKZ.app ~/Library/LaunchAgents/com.mackz.plugin.plist</code>
+      </div>
+      <h3>反馈</h3>
+      <p>问题、建议、机型适配反馈，欢迎提到
+        <a href="https://github.com/ndpysnythv-blip/MacKZ/issues" target="_blank" rel="noopener">GitHub Issues</a>。
+      </p>
+    </section>
+  </main>
+
+  <footer>
+    <p>MacKZ · 作者 <b>KDXZHX</b> · 开源免费</p>
+    <p>© 2026 KDXZHX · <a href="/">返回应用集合</a></p>
+  </footer>
+</div>
+
+<script>
+  // 复制终端命令：优先用 Clipboard API，非 HTTPS 环境回退到 execCommand
+  function copyCmd(btn) {
+    var code = btn.parentElement.querySelector('code');
+    var text = code.innerText;
+    var done = function () {
+      var old = btn.textContent;
+      btn.textContent = '已复制 ✓';
+      setTimeout(function () { btn.textContent = old; }, 1600);
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done).catch(function () { legacy(); });
+    } else { legacy(); }
+    function legacy() {
+      var ta = document.createElement('textarea');
+      ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.select();
+      try { document.execCommand('copy'); done(); } catch (e) {}
+      document.body.removeChild(ta);
+    }
+  }
+</script>
+<script>
+/* 手机遥控配对：连接码 = ip:port#口令。
+   说明：https 页面无法用 fetch 直接请求局域网 http 服务（浏览器按「混合内容」拦截），
+   所以本页只做配对入口 —— 解析出 Mac 地址后用顶层跳转把手机送进本地控制页。 */
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  if (!$('mzCode')) { return; }
+
+  // 解析连接码；分隔符兼容 # / @ / / / - 与空格，口令可省略
+  function parseCode(raw) {
+    var s = String(raw || '').trim().replace(/\s+/g, '');
+    if (!s) { return null; }
+    var eq = s.lastIndexOf('c=');          // 兼容整段带有 c= 的片段或完整 URL 粘贴
+    if (eq >= 0) { s = s.slice(eq + 2); }
+    try { s = decodeURIComponent(s); } catch (e) { /* 非法转义时按原文继续 */ }
+    var m = s.match(/^(\d{1,3}(?:\.\d{1,3}){3}):(\d{1,5})(?:[#@\/-]?(\d{1,6}))?$/);
+    if (!m) { return null; }
+    var ip = m[1], port = Number(m[2]), token = m[3] || '';
+    var parts = ip.split('.');
+    for (var i = 0; i < 4; i++) {
+      var n = Number(parts[i]);
+      if (!(n >= 0 && n <= 255)) { return null; }
+    }
+    if (!(port >= 1 && port <= 65535)) { return null; }
+    return { ip: ip, port: port, token: token };
+  }
+
+  // 控制页地址（Mac 本地 http 服务，口令沿用 t= 写法）
+  function controlURL(info) {
+    var url = 'http://' + info.ip + ':' + info.port + '/';
+    if (info.token) { url += '?t=' + encodeURIComponent(info.token); }
+    return url;
+  }
+
+  // 二维码走公开图片接口，失败自动换备用源；两个都挂掉时仍可用按钮跳转
+  function renderQR(target) {
+    var img = $('mzQr');
+    var encoded = encodeURIComponent(target);
+    img.onerror = function () {
+      if (img.dataset.fallback) { img.removeAttribute('src'); img.alt = '二维码加载失败，请点下面按钮直接打开'; return; }
+      img.dataset.fallback = '1';
+      img.src = 'https://api.pwmqr.com/qrcode/create/?url=' + encoded;
+    };
+    img.dataset.fallback = '';
+    img.src = 'https://api.qrserver.com/v1/create-qr-code/?size=260x260&margin=0&data=' + encoded;
+  }
+
+  function showPaired(info) {
+    var target = controlURL(info);
+    $('mzCodeBig').textContent = info.ip + ':' + info.port + (info.token ? '#' + info.token : '');
+    $('mzGo').href = target;
+    renderQR(target);
+    $('mzSetup').hidden = true;
+    $('mzPaired').hidden = false;
+    // 写回地址栏：刷新或把链接发给手机后仍能直接进入配对状态
+    try { history.replaceState(null, '', '#c=' + encodeURIComponent(info.ip + ':' + info.port + '#' + info.token)); } catch (e) {}
+  }
+
+  function reset() {
+    $('mzPaired').hidden = true;
+    $('mzSetup').hidden = false;
+    $('mzErr').textContent = '';
+    $('mzCode').value = '';
+    try { history.replaceState(null, '', location.pathname); } catch (e) {}
+    $('mzCode').focus();
+  }
+
+  $('mzPair').onclick = function () {
+    var info = parseCode($('mzCode').value);
+    if (!info) {
+      $('mzErr').textContent = '连接码不正确：应形如 192.168.1.5:52800#836291';
+      return;
+    }
+    $('mzErr').textContent = '';
+    showPaired(info);
+  };
+  $('mzCode').addEventListener('keydown', function (e) { if (e.key === 'Enter') { $('mzPair').click(); } });
+  $('mzReset').onclick = reset;
+  // Mac 端「打开配对页」会把连接码放在 #c= 里直接带进来
+  var hash = location.hash || '';
+  if (hash.indexOf('#c=') === 0) {
+    var info = parseCode(hash.slice(3));
+    if (info) { showPaired(info); }
+  }
+  // 同一页面上再次带新连接码打开时（只换 hash 不刷新）也能重新配对
+  window.addEventListener('hashchange', function () {
+    if (location.hash.indexOf('#c=') === 0) {
+      var again = parseCode(location.hash.slice(3));
+      if (again) { showPaired(again); }
+    }
+  });
+})();
+</script>
+</body>
+</html>
