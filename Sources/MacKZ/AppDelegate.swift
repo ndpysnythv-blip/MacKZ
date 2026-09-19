@@ -251,7 +251,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func maybeShowGyroSetup(now: CFTimeInterval) {
         if now - lastPhoneSample > 3 { gyroWizardShown = false }   // 手机重新开始报数 = 新一轮设置
         lastPhoneSample = now
-        guard !phoneGyro.isCalibrated, !gyroWizardShown else { return }
+        // 引导只在「从来没设置过」时自动弹一次；标定与引导记录都会落盘，不再每次启用都弹
+        guard !phoneGyro.setupDone, !gyroWizardShown else { return }
         gyroWizardShown = true
         showGyroSetup()
     }
@@ -262,6 +263,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let window = PhoneGyroSetupWindow()
             window.onFixed = { [weak self] in self?.markPhoneFixed() }
             window.onOpenedMax = { [weak self] in self?.markScreenMaxOpen() }
+            window.onBeginCloseLearn = { [weak self] in self?.phoneGyro.beginClosedLearn() }
+            window.onFinishCloseLearn = { [weak self] in self?.phoneGyro.finishClosedLearn() }
+            window.learnDoneProvider = { [weak self] in self?.phoneGyro.hasFullRange ?? false }
             window.onStart = { [weak self] in self?.startPhoneGyroSession() }
             window.onRedo = { [weak self] in
                 self?.phoneGyro.reset()
@@ -284,7 +288,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return nil
     }
 
-    /// 引导第 2 步：把手机当前位置记成「完全打开」——唯一的标定点，合上端按开合尺度推算
+    /// 引导第 2 步：把手机当前位置记成「完全打开」（130°）
     private func markScreenMaxOpen() -> String? {
         guard phoneGyro.hasFreshData else { return "手机上没在上报角度了：检查它是否还在控制页前台" }
         guard phoneGyro.isSteady else { return "手机还在晃（\(gyroWobbleText)）：等屏幕停稳再点一次" }
@@ -292,8 +296,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return nil
     }
 
-    /// 引导第 3 步：开始使用（此后手机陀螺仪接管铰链角度）
+    /// 引导第 3 步：开始使用（把合上学习的成果收尾，此后手机陀螺仪接管铰链角度）
     private func startPhoneGyroSession() {
+        phoneGyro.finishClosedLearn()             // 没学够行程也没关系，自动降级为单点标定
         phoneGyroActive = true
         phoneHingeDeadline = CACurrentMediaTime() + 1.5
         status.setSensorStatus("手机陀螺仪接管中")

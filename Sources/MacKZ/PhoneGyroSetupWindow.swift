@@ -1,10 +1,12 @@
 import AppKit
 
-/// 手机陀螺仪设置引导弹窗（两步 + 开始使用）。
+/// 手机陀螺仪设置引导弹窗（三步 + 开始使用）。
 ///
-/// 为什么要引导：手机贴到屏幕上以后就看不见手机画面了，「贴上去的那一刻」与「开到最大」
-/// 正好是两个标定基准点（0° 与 135°），用弹窗一步一步带着做，比让用户自己去猜
-/// 什么时候该点哪个标定按钮可靠得多；设置完成前手机只上报角度、不接管动画。
+/// 为什么要引导：手机贴到屏幕上以后就看不见手机画面了，靠弹窗一步一步带着做，
+/// 比让用户自己去猜什么时候该点哪个按钮可靠得多。
+/// 流程：① 把手机固定到屏幕上（**不用合屏幕**、只确认在报数）
+///       ② 把屏幕掀到最大并标记（= 完全打开 130°）
+///       ③ 慢慢把屏幕合到底 → 自动学习（= 完全合上 0°），两点一算就能推算全角度
 ///
 /// 沿用了 MacKZDialog 的窗口策略：nonactivatingPanel + 首击即中的按钮（本应用没有 Dock 图标）。
 final class PhoneGyroSetupWindow: NSObject, NSWindowDelegate {
@@ -13,14 +15,20 @@ final class PhoneGyroSetupWindow: NSObject, NSWindowDelegate {
     var onFixed: (() -> String?)?
     /// 第 2 步「我已开合到最大」：同上
     var onOpenedMax: (() -> String?)?
+    /// 进入第 3 步（合上学习）时调用
+    var onBeginCloseLearn: (() -> Void)?
+    /// 第 3 步手动收尾（自动学习已经成功时会提前跳到完成页）
+    var onFinishCloseLearn: (() -> Void)?
     /// 「开始使用」
     var onStart: (() -> Void)?
     /// 「重新设置」：清掉已标定参数重来
     var onRedo: (() -> Void)?
-    /// 实时状态（手机姿态 / 是否放稳）
+    /// 实时状态（手机姿态 / 是否放稳 / 学习进度）
     var statusProvider: (() -> String)?
     /// 标定参数说明（完成那一步显示）
     var mappingProvider: (() -> String)?
+    /// 合上学习是否已经自动完成（完成就自动跳到「设置完成」页）
+    var learnDoneProvider: (() -> Bool)?
 
     /// 同时存活的弹窗（非模态窗口没有持有者，得自己强引用住）
     private static var alive: [PhoneGyroSetupWindow] = []
@@ -35,7 +43,7 @@ final class PhoneGyroSetupWindow: NSObject, NSWindowDelegate {
     private let primaryButton = MacKZDialogButton(title: "我已固定好", target: nil, action: nil)
     private var timer: Timer?
 
-    /// 0 = 固定手机，1 = 开到最大，2 = 完成
+    /// 0 = 固定手机，1 = 开到最大，2 = 合上学习，3 = 完成
     private var step = 0
     /// 被拦下的原因（红字提示）
     private var hint = ""
@@ -43,7 +51,7 @@ final class PhoneGyroSetupWindow: NSObject, NSWindowDelegate {
     var isVisible: Bool { panel.isVisible }
 
     override init() {
-        panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 560, height: 260),
+        panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 580, height: 270),
                         styleMask: [.titled, .closable, .nonactivatingPanel],
                         backing: .buffered, defer: false)
         super.init()
@@ -59,15 +67,15 @@ final class PhoneGyroSetupWindow: NSObject, NSWindowDelegate {
         stepLabel.font = .boldSystemFont(ofSize: 11)
         stepLabel.textColor = .secondaryLabelColor
         titleLabel.font = .boldSystemFont(ofSize: 14)
-        titleLabel.preferredMaxLayoutWidth = 320
+        titleLabel.preferredMaxLayoutWidth = 330
         detailLabel.font = .systemFont(ofSize: 11.5)
         detailLabel.textColor = .secondaryLabelColor
-        detailLabel.preferredMaxLayoutWidth = 320
+        detailLabel.preferredMaxLayoutWidth = 330
         statusLabel.font = .monospacedDigitSystemFont(ofSize: 11.5, weight: .semibold)
         statusLabel.lineBreakMode = .byTruncatingTail
         hintLabel.font = .systemFont(ofSize: 11.5)
         hintLabel.textColor = .systemRed
-        hintLabel.preferredMaxLayoutWidth = 500
+        hintLabel.preferredMaxLayoutWidth = 520
 
         primaryButton.target = self
         primaryButton.action = #selector(advance)
@@ -105,8 +113,8 @@ final class PhoneGyroSetupWindow: NSObject, NSWindowDelegate {
         let container = NSView()
         container.addSubview(stack)
         NSLayoutConstraint.activate([
-            illustration.widthAnchor.constraint(equalToConstant: 200),
-            illustration.heightAnchor.constraint(equalToConstant: 130),
+            illustration.widthAnchor.constraint(equalToConstant: 208),
+            illustration.heightAnchor.constraint(equalToConstant: 140),
             stack.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             stack.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             stack.topAnchor.constraint(equalTo: container.topAnchor),
@@ -115,7 +123,7 @@ final class PhoneGyroSetupWindow: NSObject, NSWindowDelegate {
         panel.contentView = container
 
         let fitting = stack.fittingSize
-        panel.setContentSize(NSSize(width: max(fitting.width, 560), height: max(fitting.height, 230)))
+        panel.setContentSize(NSSize(width: max(fitting.width, 580), height: max(fitting.height, 240)))
         panel.center()
         render()
     }
@@ -155,7 +163,13 @@ final class PhoneGyroSetupWindow: NSObject, NSWindowDelegate {
         case 0:
             if let problem = onFixed?() { hint = problem } else { step = 1 }
         case 1:
-            if let problem = onOpenedMax?() { hint = problem } else { step = 2 }
+            if let problem = onOpenedMax?() { hint = problem } else {
+                step = 2
+                onBeginCloseLearn?()                 // 进入合上学习
+            }
+        case 2:
+            onFinishCloseLearn?()                    // 用户自己点了「已完成合上」
+            step = 3
         default:
             onStart?()
             close()
@@ -177,37 +191,46 @@ final class PhoneGyroSetupWindow: NSObject, NSWindowDelegate {
     /// 取消：只关窗，不动已标定的参数
     @objc private func cancel() { close() }
 
-    /// 刷新实时状态行（手机姿态 / 放稳）
+    /// 刷新实时状态行；合上学习自动成功时直接跳到完成页
     private func refresh() {
         statusLabel.stringValue = statusProvider?() ?? ""
+        if step == 2, learnDoneProvider?() == true {
+            step = 3
+            render()
+        }
     }
 
     private func render() {
         switch step {
         case 0:
-            stepLabel.stringValue = "第 1 步 / 共 2 步"
-            titleLabel.stringValue = "请先把手机固定在 Mac 屏幕上"
-            detailLabel.stringValue = "先把屏幕合到底，再把手机贴（或用皮筋绑）到屏幕背面 —— 横放、竖放都可以。\n"
-                + "贴稳后点下面的按钮 —— 这一步不做标定，只确认手机已经在报数。"
+            stepLabel.stringValue = "第 1 步 / 共 3 步"
+            titleLabel.stringValue = "请先把手机固定到 Mac 屏幕上"
+            detailLabel.stringValue = "把手机贴（或用皮筋绑）到屏幕背面，横放、竖放都可以 —— **这一步不用合屏幕**。\n"
+                + "贴稳后点下面的按钮，只确认手机已经在报数。"
             primaryButton.title = "我已固定好"
-            statusLabel.isHidden = false
             illustration.setMode(.closed)
         case 1:
-            stepLabel.stringValue = "第 2 步 / 共 2 步"
+            stepLabel.stringValue = "第 2 步 / 共 3 步"
             titleLabel.stringValue = "请将 Mac 屏幕开合到最大"
-            detailLabel.stringValue = "慢慢把屏幕掀到最大角度后停住，等手机放稳（下面的状态变成「已放稳」）。\n"
-                + "这一步会把当前位置记成「完全打开」，合上端由 MacBook 固定的开合尺度推算。"
+            detailLabel.stringValue = "慢慢把屏幕掀到最大角度（MacBook 约 130°）后停住，等状态变成「已放稳」。\n"
+                + "这一步记下「完全打开」参考点。"
             primaryButton.title = "我已开合到最大"
-            statusLabel.isHidden = false
             illustration.setMode(.opening)
+        case 2:
+            stepLabel.stringValue = "第 3 步 / 共 3 步"
+            titleLabel.stringValue = "请把屏幕慢慢合到底"
+            detailLabel.stringValue = "像动画这样慢慢合，合到最底停一下。\n"
+                + "合到底后屏幕会黑、点不到按钮，所以**不用点任何东西**，程序会自动记下「完全合上」。"
+            primaryButton.title = "已完成合上"
+            illustration.setMode(.closing)
         default:
             stepLabel.stringValue = "设置完成"
             titleLabel.stringValue = "已设置完成，开始使用吧"
             detailLabel.stringValue = (mappingProvider?() ?? "") + "\n点「开始使用」后，手机陀螺仪就会接管铰链角度。"
             primaryButton.title = "开始使用"
-            statusLabel.isHidden = false
             illustration.setMode(.open)
         }
+        statusLabel.isHidden = false
         hintLabel.stringValue = hint
         hintLabel.isHidden = hint.isEmpty
     }
@@ -216,7 +239,7 @@ final class PhoneGyroSetupWindow: NSObject, NSWindowDelegate {
 
     private func startTimer() {
         stopTimer()
-        let t = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in self?.refresh() }
+        let t = Timer(timeInterval: 0.4, repeats: true) { [weak self] _ in self?.refresh() }
         RunLoop.main.add(t, forMode: .common)
         timer = t
     }
@@ -227,20 +250,30 @@ final class PhoneGyroSetupWindow: NSObject, NSWindowDelegate {
     }
 }
 
-/// 弹窗左侧的动画示意：MacBook 侧视图 —— 屏幕绕底座后方的铰链向上掀开，手机贴在屏幕背面。
+/// 弹窗左侧的动画示意：MacBook 侧视图（底座在右、铰链在左后方），屏幕绕铰链向上掀开，手机贴在屏幕背面。
 /// 用「显式三角函数 + 60Hz 定时器」画，不依赖 CALayer 的锚点与旋转方向
 /// （那套在 AppKit 里很容易把屏幕画成向下翻，之前就是这么错的）。
 private final class HingeIllustrationView: NSView {
 
     enum Mode {
         case closed     // 合上（第 1 步：把手机贴上去）
-        case opening    // 来回开合（第 2 步：掀到最大）
+        case opening    // 由合上掀到最大，来回摆动（第 2 步）
+        case closing    // 由最大合到底，来回摆动（第 3 步：示意怎么合）
         case open       // 停在最大（完成）
     }
 
+    /// MacBook 最大开合角
+    private static let maxAngle: CGFloat = 130
+    /// 单程动画时长（秒）
+    private static let travelSeconds: CGFloat = 1.8
+    /// 到达端点后的停顿（秒）
+    private static let dwellSeconds: CGFloat = 0.45
+
     private var mode: Mode = .closed
-    private var angleDeg: CGFloat = 0        // 0 = 合上，135 = 开到最大
-    private var sweep: CGFloat = 0           // 0~2 的三角波相位
+    /// 0 = 合上，1 = 开到最大
+    private var k: CGFloat = 0
+    private var dir: CGFloat = 1
+    private var dwell: CGFloat = 0
     private var timer: Timer?
 
     /// 左上角原点：画图时 y 向下，往上掀就是负方向，算起来最直观
@@ -256,23 +289,23 @@ private final class HingeIllustrationView: NSView {
 
     func setMode(_ mode: Mode) {
         self.mode = mode
+        dwell = 0
         switch mode {
         case .closed:
-            angleDeg = 0
-            stop()
+            k = 0; dir = 1; stop()
         case .open:
-            angleDeg = 135
-            stop()
+            k = 1; dir = -1; stop()
         case .opening:
-            sweep = 0
-            start()
+            k = 0; dir = 1; start()
+        case .closing:
+            k = 1; dir = -1; start()
         }
         needsDisplay = true
     }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        if window == nil { stop() } else if mode == .opening { start() }
+        if window == nil { stop() } else if mode == .opening || mode == .closing { start() }
     }
 
     private func start() {
@@ -287,52 +320,85 @@ private final class HingeIllustrationView: NSView {
         timer = nil
     }
 
-    /// 合上 ↔ 开到最大 来回摆动（单程 1.6 秒，两端缓一下，看着像真在掀屏幕）
+    /// 在 0 ↔ 1 之间来回摆动（两端各停一下），变换成平滑开合角
     private func tick() {
-        sweep += 1.0 / 60.0 / 1.6
-        if sweep > 2 { sweep -= 2 }
-        let k = sweep <= 1 ? sweep : 2 - sweep
-        angleDeg = 135 * (k * k * (3 - 2 * k))            // smoothstep
+        let dt = 1.0 / 60.0
+        if dwell > 0 {
+            dwell -= CGFloat(dt)
+            needsDisplay = true
+            return
+        }
+        k += dir * CGFloat(dt) / Self.travelSeconds
+        if k >= 1 { k = 1; dir = -1; dwell = Self.dwellSeconds }
+        if k <= 0 { k = 0; dir = 1; dwell = Self.dwellSeconds }
         needsDisplay = true
     }
 
     override func draw(_ dirtyRect: NSRect) {
         // 铰链在底座后方（左侧），屏幕绕它向上掀
-        let hinge = NSPoint(x: 72, y: 100)
-        let length: CGFloat = 60
+        let hinge = NSPoint(x: 76, y: 108)
+        let lidLength: CGFloat = 66
+        let angleDeg = Self.maxAngle * (k * k * (3 - 2 * k))      // smoothstep，两端缓一下
         let rad = angleDeg * .pi / 180
-        let dir = NSPoint(x: cos(rad), y: -sin(rad))       // 合上时指向右（贴在底座上），掀起后朝上、再朝左后
-        let tip = NSPoint(x: hinge.x + dir.x * length, y: hinge.y + dir.y * length)
+        let dirVec = NSPoint(x: cos(rad), y: -sin(rad))           // 合上时指向右（贴在底座上），掀起后朝上、再朝左后
+        let tip = NSPoint(x: hinge.x + dirVec.x * lidLength, y: hinge.y + dirVec.y * lidLength)
+        // 屏幕背面（朝外那一侧）的法线方向
+        let normal = NSPoint(x: -sin(rad), y: -cos(rad))
 
-        // 键盘底座
-        let base = NSBezierPath(roundedRect: NSRect(x: 66, y: 94, width: 104, height: 12),
-                                xRadius: 4, yRadius: 4)
-        NSColor.secondaryLabelColor.withAlphaComponent(0.35).setFill()
+        // 桌面参考线
+        let desk = NSBezierPath()
+        desk.move(to: NSPoint(x: 46, y: 126))
+        desk.line(to: NSPoint(x: 196, y: 126))
+        desk.lineWidth = 1
+        NSColor.secondaryLabelColor.withAlphaComponent(0.25).setStroke()
+        desk.stroke()
+
+        // 键盘底座（在铰链右侧 = 使用者那一侧）
+        let base = NSBezierPath(roundedRect: NSRect(x: hinge.x, y: 114, width: 112, height: 12),
+                                xRadius: 3, yRadius: 3)
+        NSColor.secondaryLabelColor.withAlphaComponent(0.45).setFill()
         base.fill()
 
-        // 屏幕（侧视即一条圆头粗线）
+        // 屏幕：先用粗圆头线画出整块屏的侧面厚度，再画一条浅色线表示显示器这一面
         let lid = NSBezierPath()
         lid.move(to: hinge)
         lid.line(to: tip)
-        lid.lineWidth = 10
+        lid.lineWidth = 11
         lid.lineCapStyle = .round
         NSColor.controlAccentColor.withAlphaComponent(0.85).setStroke()
         lid.stroke()
 
-        // 贴在屏幕背面的手机（朝外那一侧）
-        let normal = NSPoint(x: -sin(rad), y: -cos(rad))   // 合上时朝上，竖直时朝左
-        let gap: CGFloat = 9
+        let panelFace = NSBezierPath()
+        panelFace.move(to: NSPoint(x: hinge.x - normal.x * 4, y: hinge.y - normal.y * 4))
+        panelFace.line(to: NSPoint(x: tip.x - normal.x * 4, y: tip.y - normal.y * 4))
+        panelFace.lineWidth = 3
+        panelFace.lineCapStyle = .round
+        NSColor.white.withAlphaComponent(0.75).setStroke()
+        panelFace.stroke()
+
+        // 贴在屏幕背面的手机（外侧，稍微离开一点表示隔了一层壳）
+        let gap: CGFloat = 10
         let phone = NSBezierPath()
-        phone.move(to: NSPoint(x: hinge.x + dir.x * 24 + normal.x * gap, y: hinge.y + dir.y * 24 + normal.y * gap))
-        phone.line(to: NSPoint(x: hinge.x + dir.x * 54 + normal.x * gap, y: hinge.y + dir.y * 54 + normal.y * gap))
+        phone.move(to: NSPoint(x: hinge.x + dirVec.x * 22 + normal.x * gap,
+                              y: hinge.y + dirVec.y * 22 + normal.y * gap))
+        phone.line(to: NSPoint(x: hinge.x + dirVec.x * 58 + normal.x * gap,
+                               y: hinge.y + dirVec.y * 58 + normal.y * gap))
         phone.lineWidth = 13
         phone.lineCapStyle = .round
-        NSColor.labelColor.withAlphaComponent(0.75).setStroke()
+        NSColor.labelColor.withAlphaComponent(0.8).setStroke()
         phone.stroke()
 
-        // 铰链
-        let dot = NSBezierPath(ovalIn: NSRect(x: hinge.x - 3, y: hinge.y - 3, width: 6, height: 6))
+        // 铰链圆点
+        let dot = NSBezierPath(ovalIn: NSRect(x: hinge.x - 3.5, y: hinge.y - 3.5, width: 7, height: 7))
         NSColor.secondaryLabelColor.setFill()
         dot.fill()
+
+        // 右下角标注当前角度，一眼看懂是「合上」还是「开到最大」
+        let text = String(format: "%.0f°", angleDeg)
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .semibold),
+            .foregroundColor: NSColor.secondaryLabelColor
+        ]
+        (text as NSString).draw(at: NSPoint(x: 150, y: 96), withAttributes: attrs)
     }
 }
