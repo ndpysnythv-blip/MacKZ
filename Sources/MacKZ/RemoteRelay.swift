@@ -19,8 +19,9 @@ final class RemoteRelay {
     var onHinge: ((Double) -> Void)?
     /// 连接状态文本（主线程回调）
     var onStatus: ((String) -> Void)?
-    /// 回传给手机的本机状态：折叠进度 0~1 与当前铰链角度（角度可能暂无）
-    var stateProvider: (() -> (progress: Double, angle: Double?))?
+    /// 回传给手机的本机状态：折叠进度 0~1、当前铰链角度（角度可能暂无）、
+    /// 手机陀螺仪会话状态（"setup" = 还没设置完，手机端显示「等待 Mac 设置」；"running" = 已开始使用）
+    var stateProvider: (() -> (progress: Double, angle: Double?, phoneGyro: String))?
 
     /// 公共中转地址（实测 wss 可用；两端用同一个即可互通）
     private static let broker = URL(string: "wss://broker.hivemq.com:8884/mqtt")!
@@ -268,6 +269,7 @@ final class RemoteRelay {
             guard let self, self.isConnected, let state = self.stateProvider?() else { return }
             var json = "{\"p\":" + String(format: "%.3f", state.progress)
             if let angle = state.angle { json += ",\"g\":" + String(format: "%.1f", angle) }
+            json += ",\"s\":\"" + state.phoneGyro + "\""
             json += "}"
             self.publish(json)
         }

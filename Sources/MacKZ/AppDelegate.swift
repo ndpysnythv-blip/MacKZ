@@ -26,6 +26,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var phoneHingeWatchdog: Timer?
     /// 手机陀螺仪标定（放稳判定 + 两点标定，按钮都在设置面板上）
     private let phoneGyro = PhoneGyroCalibration()
+    /// 手机陀螺仪是否已「开始使用」：引导走完之前只收数据用于标定，不驱动动画
+    private var phoneGyroActive = false
+    /// 引导弹窗本轮是否已经弹过（手机重新开始报数会重置）
+    private var gyroWizardShown = false
+    /// 设置引导弹窗
+    private var gyroSetup: PhoneGyroSetupWindow?
+    /// 最近一次收到手机角度的时间（用来识别手机重新开始报数）
+    private var lastPhoneSample: CFTimeInterval = 0
     private var status: StatusBarController!
     private var settings: SettingsWindowController!
 
@@ -133,8 +141,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         relay.onHinge = { [weak self] angle in self?.acceptPhoneHinge(angle) }
         // 中转需要把本机进度回传给手机页面显示
         relay.stateProvider = { [weak self] in
-            guard let self else { return (progress: 0, angle: nil) }
-            return (progress: self.engine.progress, angle: self.engine.lastAngleDeg)
+            guard let self else { return (progress: 0, angle: nil, phoneGyro: "setup") }
+            return (progress: self.engine.progress, angle: self.engine.lastAngleDeg,
+                    phoneGyro: self.phoneGyroActive ? "running" : "setup")
         }
         settings.remoteInfoProvider = { [weak self] in
             guard let self else {
@@ -157,9 +166,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settings.onGyroCalibrateOpen = { [weak self] in self?.calibratePhoneGyro { $0.calibrateOpenHere() } }
         settings.onGyroCalibrateReset = { [weak self] in
             self?.phoneGyro.reset()
+            self?.phoneGyroActive = false
             self?.settings?.flashMessage("手机陀螺仪标定已复位（回到手机原始角度）")
             self?.settings?.refreshRemoteInfo()
         }
+        settings.onOpenGyroSetup = { [weak self] in self?.showGyroSetup() }
 
         // 按配置启停手机遥控
         if config.remoteControl {
@@ -219,6 +230,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let now = CACurrentMediaTime()
         // 手机上报的是原始姿态角，这里按面板上的标定映射成铰链角
         let hinge = phoneGyro.ingest(raw: angle, at: now)
+        maybeShowGyroSetup(now: now)
+        // 引导没走完（还没点「开始使用」）之前，只收数据用于标定，不让手机驱动动画
+        guard phoneGyroActive else { return }
         if now > phoneHingeDeadline {
             status.setSensorStatus("手机陀螺仪接管中")
             NSLog("[MacKZ] 手机陀螺仪开始接管铰链角度")
@@ -226,6 +240,69 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         phoneHingeDeadline = now + 1.5
         engine.update(angle: hinge, timestamp: now)
         startPhoneHingeWatchdog()
+    }
+
+    // MARK: - 手机陀螺仪设置引导
+
+    /// 手机拿到权限开始报数后，Mac 这边自动把引导弹出来（本轮只弹一次，关掉就不再打扰）
+    private func maybeShowGyroSetup(now: CFTimeInterval) {
+        if now - lastPhoneSample > 3 { gyroWizardShown = false }   // 手机重新开始报数 = 新一轮设置
+        lastPhoneSample = now
+        guard !phoneGyroActive, !gyroWizardShown else { return }
+        gyroWizardShown = true
+        showGyroSetup()
+    }
+
+    /// 打开设置引导弹窗（手机端点了「启用陀螺仪」后自动弹，也可以从设置面板手动打开）
+    private func showGyroSetup() {
+        if gyroSetup == nil {
+            let window = PhoneGyroSetupWindow()
+            window.onFixed = { [weak self] in self?.markPhoneFixed() }
+            window.onOpenedMax = { [weak self] in self?.markScreenMaxOpen() }
+            window.onStart = { [weak self] in self?.startPhoneGyroSession() }
+            window.onRedo = { [weak self] in
+                self?.phoneGyro.reset()
+                self?.phoneGyroActive = false
+                self?.settings?.refreshRemoteInfo()
+            }
+            window.statusProvider = { [weak self] in self?.phoneGyro.statusText() ?? "" }
+            window.mappingProvider = { [weak self] in self?.phoneGyro.mappingText() ?? "" }
+            gyroSetup = window
+        }
+        gyroSetup?.show()
+    }
+
+    /// 引导第 1 步：把手机当前位置记成「完全合上」（返回 nil 表示通过，否则是拦下的原因）
+    private func markPhoneFixed() -> String? {
+        guard phoneGyro.hasFreshData else {
+            return "还没收到手机角度：先在手机控制页点「启用陀螺仪」并允许「运动与方向访问」"
+        }
+        guard phoneGyro.isSteady else { return "手机还在晃（\(gyroWobbleText)）：贴稳一点再点一次" }
+        phoneGyro.calibrateClosedHere()
+        return nil
+    }
+
+    /// 引导第 2 步：把手机当前位置记成「完全打开」
+    private func markScreenMaxOpen() -> String? {
+        guard phoneGyro.hasFreshData else { return "手机上没在上报角度了：检查它是否还在控制页前台" }
+        guard phoneGyro.isSteady else { return "手机还在晃（\(gyroWobbleText)）：等屏幕停稳再点一次" }
+        phoneGyro.calibrateOpenHere()
+        return nil
+    }
+
+    /// 引导第 3 步：开始使用（此后手机陀螺仪接管铰链角度）
+    private func startPhoneGyroSession() {
+        phoneGyroActive = true
+        phoneHingeDeadline = CACurrentMediaTime() + 1.5
+        status.setSensorStatus("手机陀螺仪接管中")
+        NSLog("[MacKZ] 手机陀螺仪设置完成，开始接管铰链角度")
+        settings?.flashMessage("手机陀螺仪已开始使用")
+        settings?.refreshRemoteInfo()
+    }
+
+    /// 晃动幅度文本（提示用）
+    private var gyroWobbleText: String {
+        phoneGyro.wobble.map { String(format: "±%.1f°", $0) } ?? "读数中"
     }
 
     /// 执行一次手机陀螺仪标定。

@@ -48,6 +48,8 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     var onGyroCalibrateOpen: (() -> Void)?
     /// 复位标定
     var onGyroCalibrateReset: (() -> Void)?
+    /// 打开「手机陀螺仪设置引导」弹窗（固定手机 → 开到最大 → 开始使用）
+    var onOpenGyroSetup: (() -> Void)?
     /// 实时状态拉取：角度 / 阶段 / 屏幕录制权限
     var statusProvider: (() -> (angle: String, phase: String, capture: String))?
 
@@ -237,8 +239,8 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             "陀螺仪模式：把手机竖着贴（或用皮筋绑）在 MacBook 屏幕上、手机顶部朝屏幕顶边，"
             + "在手机控制页点「启用陀螺仪」并允许「运动与方向访问」，手机姿态角就会实时换算成屏幕开合角，"
             + "替代本机铰链传感器 —— 适合没有 Lid Angle Sensor 的机型。\n"
-            + "标定在本面板上做（手机贴在屏幕上时看不到手机画面）：等下面状态显示「已放稳」，"
-            + "再按当前姿态点「当前位置＝完全合上」或「当前位置＝完全打开」；点错了用「复位标定」退回手机原始角度。\n"
+            + "标定推荐直接点「手机陀螺仪设置引导…」，跟着弹窗走两步（先把手机固定在屏幕上 → 再把屏幕开到最大）即可；"
+            + "也可以在上面看到手机放稳后，手动点「当前位置＝完全合上 / 完全打开」，点错了用「复位标定」退回手机原始角度。\n"
             + "手机锁屏或切到后台会自动交回本机传感器；官网是 https 页面，符合 iOS 对「安全上下文」的要求，所以陀螺仪能正常读数。")
         gyroTip.font = .systemFont(ofSize: 11)
         gyroTip.textColor = .tertiaryLabelColor
@@ -273,6 +275,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             switchRow("允许手机陀螺仪接管角度", \.phoneGyro),
             makeRow(views: [gyroState]),
             makeRow(views: [gyroMap]),
+            makeRow(views: [makeButton("手机陀螺仪设置引导…", #selector(openGyroSetup))]),
             makeRow(views: [gyroZero, gyroOpen, makeButton("复位标定", #selector(gyroMarkReset))]),
             remoteHelp
         ]))
@@ -767,6 +770,9 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
 
     /// 复位标定
     @objc private func gyroMarkReset() { onGyroCalibrateReset?() }
+
+    /// 打开手机陀螺仪设置引导
+    @objc private func openGyroSetup() { onOpenGyroSetup?() }
 
     /// 给面板底部状态行写一句提示（标定被拒、标定完成等）
     func flashMessage(_ text: String) { flashStatus(text) }

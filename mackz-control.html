@@ -36,6 +36,7 @@
   .pill { display: inline-block; font-size: 12px; padding: 3px 10px; border-radius: 999px;
           background: #1b2130; border: 1px solid #2b3245; color: #9aa4bb; }
   .pill.ok { background: #10301f; border-color: #1e5c39; color: #6ee7a5; }
+  .pill.warn { background: #2a2413; border-color: #5c4a1e; color: #e7c56e; }
   .tip { font-size: 11.5px; color: #7f8aa3; }
   .back { display: block; text-align: center; color: #9aa4bb; font-size: 13px; text-decoration: none; margin-top: 4px; }
   .back:hover { color: #dfe5ff; }
@@ -224,6 +225,16 @@
         try { obj = JSON.parse(text); } catch (e) { return; }
         if (typeof obj.p === 'number') { applyProgress(obj.p); }
         if (typeof obj.g === 'number') { $('lid').textContent = obj.g.toFixed(1) + '°'; }
+        // Mac 端走完引导并点了「开始使用」→ 本页从「等待 Mac 设置」切到「接管中」
+        if (obj.s === 'running') {
+          if (gyroOn && gyroState !== 'running') {
+            setGyroState('running');
+            $('gyroTip').textContent = 'Mac 已开始使用手机陀螺仪：掀合屏幕就能驱动折叠动画。'
+              + '切到后台或锁屏会暂停上报，Mac 会自动交回自己身上的铰链传感器。';
+          }
+        } else if (gyroOn && gyroState === 'running') {
+          setGyroState('waiting');               // Mac 那边重新设置/复位了
+        }
       }
     });
   }
@@ -266,6 +277,8 @@
   // （手机贴在屏幕上时看不到本页，只有那边的按钮点得到）。
   var gyroMount = localStorage.getItem('mackzMount') || 'back';
   var gyroLastLid = null, gyroLastSend = 0;
+  var gyroOn = false;          // 是否已在读姿态（拿到权限后即为 true）
+  var gyroState = 'off';       // 'off' | 'waiting'（等 Mac 设置）| 'running'（已接管）
 
   function refreshMountLabel() {
     $('gyroMount').textContent = '贴法：' + (gyroMount === 'back' ? '屏幕背面' : '屏幕正面');
@@ -290,16 +303,27 @@
     send({ h: Number(gyroLastLid.toFixed(2)) });
   }
 
+  // 陀螺仪状态标签：off / waiting（已拿权限、等 Mac 设置完）/ running（Mac 已开始使用）
+  function setGyroState(state) {
+    gyroState = state;
+    var el = $('gyroState');
+    if (state === 'running') { el.textContent = '接管中'; el.className = 'pill ok'; }
+    else if (state === 'waiting') { el.textContent = '等待 Mac 设置'; el.className = 'pill warn'; }
+    else { el.textContent = '未启用'; el.className = 'pill'; }
+  }
+
   function startGyro() {
     window.addEventListener('devicemotion', onMotion, true);
-    $('gyroState').textContent = '接管中';
-    $('gyroState').className = 'pill ok';
-    $('gyroTip').textContent = '保持本页在前台：切到后台或锁屏会暂停上报，Mac 会自动交回本机传感器。';
+    gyroOn = true;
+    // 拿到权限后先只上报角度，等 Mac 上把「固定手机 → 开到最大 → 开始使用」走完才真正接管
+    setGyroState('waiting');
+    $('gyroTip').textContent = '权限已获取。剩下的请在 Mac 上操作设置：Mac 会弹出引导 —— ① 把手机固定到屏幕上 '
+      + '② 把屏幕开到最大 ③ 点「开始使用」。设置完成前，陀螺仪不会接管折叠动画。';
   }
   function stopGyro() {
     window.removeEventListener('devicemotion', onMotion, true);
-    $('gyroState').textContent = '已停止';
-    $('gyroState').className = 'pill';
+    gyroOn = false;
+    setGyroState('off');
     $('gyroAngle').textContent = '--°';
     $('gyroTip').textContent = '已停止上报，Mac 会在 1.5 秒内交回本机传感器。';
   }
