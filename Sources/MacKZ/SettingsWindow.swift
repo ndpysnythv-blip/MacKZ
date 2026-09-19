@@ -40,6 +40,14 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     var onOpenPairPage: (() -> Void)?
     /// 打开官网介绍页
     var onOpenHomepage: (() -> Void)?
+    /// 手机陀螺仪标定状态：状态文本 / 标定说明 / 是否允许标定（手机放稳了才允许）
+    var phoneGyroProvider: (() -> (status: String, mapping: String, canCalibrate: Bool))?
+    /// 「当前位置＝完全合上」（0°）
+    var onGyroCalibrateZero: (() -> Void)?
+    /// 「当前位置＝完全打开」（135°）
+    var onGyroCalibrateOpen: (() -> Void)?
+    /// 复位标定
+    var onGyroCalibrateReset: (() -> Void)?
     /// 实时状态拉取：角度 / 阶段 / 屏幕录制权限
     var statusProvider: (() -> (angle: String, phase: String, capture: String))?
 
@@ -65,6 +73,13 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     private var qrHint: NSTextField?
     /// 当前二维码对应的配对地址，地址没变就不重复请求
     private var qrLink = ""
+    /// 手机陀螺仪：姿态/放稳状态显示
+    private var gyroStatusLabel: NSTextField?
+    /// 手机陀螺仪：当前标定情况显示
+    private var gyroMappingLabel: NSTextField?
+    /// 两个标定按钮：手机没放稳时禁用
+    private var gyroZeroButton: NSButton?
+    private var gyroOpenButton: NSButton?
     private var timer: Timer?
     /// NSControl.target 是弱引用，这里强引用住所有回调持有者，防止被释放
     private var handlers: [NSObject] = []
@@ -82,6 +97,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         refreshStatus()
         refreshSleepState()
         refreshRemoteInfo()
+        refreshPhoneGyro()
         window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         startTimer()
@@ -219,13 +235,29 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         // 陀螺仪用法说明：手机没有铰链传感器也能靠姿态角驱动折叠动画
         let gyroTip = NSTextField(wrappingLabelWithString:
             "陀螺仪模式：把手机竖着贴（或用皮筋绑）在 MacBook 屏幕上、手机顶部朝屏幕顶边，"
-            + "在官网页面上点「启用陀螺仪」并允许「运动与方向访问」，手机姿态角就会实时换算成屏幕开合角，"
+            + "在手机控制页点「启用陀螺仪」并允许「运动与方向访问」，手机姿态角就会实时换算成屏幕开合角，"
             + "替代本机铰链传感器 —— 适合没有 Lid Angle Sensor 的机型。\n"
-            + "首次使用请在合上屏幕时点一次「标定为完全合上」；手机锁屏或切到后台会自动交回本机传感器。\n"
-            + "官网是 https 页面，符合 iOS 对「安全上下文」的要求，所以陀螺仪能正常读数。")
+            + "标定在本面板上做（手机贴在屏幕上时看不到手机画面）：等下面状态显示「已放稳」，"
+            + "再按当前姿态点「当前位置＝完全合上」或「当前位置＝完全打开」；点错了用「复位标定」退回手机原始角度。\n"
+            + "手机锁屏或切到后台会自动交回本机传感器；官网是 https 页面，符合 iOS 对「安全上下文」的要求，所以陀螺仪能正常读数。")
         gyroTip.font = .systemFont(ofSize: 11)
         gyroTip.textColor = .tertiaryLabelColor
         gyroTip.preferredMaxLayoutWidth = 500
+
+        // 手机陀螺仪标定：手机贴（绑）在屏幕上时看不到手机画面，标定只能在这边点
+        let gyroState = NSTextField(labelWithString: "手机姿态：未收到数据")
+        gyroState.font = .monospacedDigitSystemFont(ofSize: 12.5, weight: .semibold)
+        gyroState.lineBreakMode = .byTruncatingTail
+        gyroStatusLabel = gyroState
+        let gyroMap = NSTextField(labelWithString: "")
+        gyroMap.font = .systemFont(ofSize: 11)
+        gyroMap.textColor = .tertiaryLabelColor
+        gyroMap.lineBreakMode = .byTruncatingTail
+        gyroMappingLabel = gyroMap
+        let gyroZero = makeButton("当前位置＝完全合上", #selector(gyroMarkClosed))
+        let gyroOpen = makeButton("当前位置＝完全打开", #selector(gyroMarkOpen))
+        gyroZeroButton = gyroZero
+        gyroOpenButton = gyroOpen
 
         // 这两段说明很长，默认折叠，需要时点标题展开，避免把面板撑得过长
         let remoteHelp = collapsibleBox(title: "更多介绍", rows: [remoteTip, gyroTip])
@@ -239,6 +271,9 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
                             makeButton("刷新连接码", #selector(refreshRemoteURL))]),
             switchRow("启用手机遥控", \.remoteControl),
             switchRow("允许手机陀螺仪接管角度", \.phoneGyro),
+            makeRow(views: [gyroState]),
+            makeRow(views: [gyroMap]),
+            makeRow(views: [gyroZero, gyroOpen, makeButton("复位标定", #selector(gyroMarkReset))]),
             remoteHelp
         ]))
 
@@ -555,6 +590,17 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         captureLabel?.stringValue = "屏幕录制权限：\(s.capture)"
         captureLabel?.textColor = s.capture == "已授权" ? .systemGreen : .systemOrange
         refreshRemoteInfo()          // 手机遥控地址/状态跟着一起刷新
+        refreshPhoneGyro()           // 手机姿态与放稳判定（决定标定按钮能不能点）
+    }
+
+    /// 刷新手机陀螺仪区：姿态/放稳状态 + 标定说明；手机没放稳时禁用两个标定按钮
+    private func refreshPhoneGyro() {
+        guard let info = phoneGyroProvider?() else { return }
+        gyroStatusLabel?.stringValue = info.status
+        gyroStatusLabel?.textColor = info.canCalibrate ? .systemGreen : .secondaryLabelColor
+        gyroMappingLabel?.stringValue = info.mapping
+        gyroZeroButton?.isEnabled = info.canCalibrate
+        gyroOpenButton?.isEnabled = info.canCalibrate
     }
 
     func windowWillClose(_ notification: Notification) {
@@ -710,6 +756,20 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
 
     /// 刷新地址：真的重新起一次监听（重新读局域网 IP + 换一个新口令），而不是只刷新文字显示
     @objc private func refreshRemoteURL() { onRefreshRemote?() }
+
+    // MARK: - 手机陀螺仪标定
+
+    /// 「当前位置＝完全合上」
+    @objc private func gyroMarkClosed() { onGyroCalibrateZero?() }
+
+    /// 「当前位置＝完全打开」
+    @objc private func gyroMarkOpen() { onGyroCalibrateOpen?() }
+
+    /// 复位标定
+    @objc private func gyroMarkReset() { onGyroCalibrateReset?() }
+
+    /// 给面板底部状态行写一句提示（标定被拒、标定完成等）
+    func flashMessage(_ text: String) { flashStatus(text) }
 
     /// 刷新「合盖不休眠」当前的实际系统状态（读 pmset，开销很小，只在需要时调用）
     func refreshSleepState() {

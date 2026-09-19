@@ -24,6 +24,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// 手机陀螺仪数据有效期：收到数据后一段时间内由手机接管角度，本机传感器读数被忽略
     private var phoneHingeDeadline: CFTimeInterval = 0
     private var phoneHingeWatchdog: Timer?
+    /// 手机陀螺仪标定（放稳判定 + 两点标定，按钮都在设置面板上）
+    private let phoneGyro = PhoneGyroCalibration()
     private var status: StatusBarController!
     private var settings: SettingsWindowController!
 
@@ -142,6 +144,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return (enabled: self.config.remoteControl, code: self.relay.code, status: status,
                     localURL: self.remote.accessURL, pairURL: self.relay.pairPageURL)
         }
+
+        // ---------- 手机陀螺仪标定：手机贴在屏幕上时点不到手机页面，所以按钮都放这边 ----------
+        settings.phoneGyroProvider = { [weak self] in
+            guard let self, self.config.phoneGyro else {
+                return (status: "手机姿态：未启用（先打开「允许手机陀螺仪接管角度」）", mapping: "", canCalibrate: false)
+            }
+            return (status: self.phoneGyro.statusText(), mapping: self.phoneGyro.mappingText(),
+                    canCalibrate: self.phoneGyro.canCalibrate)
+        }
+        settings.onGyroCalibrateZero = { [weak self] in self?.calibratePhoneGyro { $0.calibrateClosedHere() } }
+        settings.onGyroCalibrateOpen = { [weak self] in self?.calibratePhoneGyro { $0.calibrateOpenHere() } }
+        settings.onGyroCalibrateReset = { [weak self] in
+            self?.phoneGyro.reset()
+            self?.settings?.flashMessage("手机陀螺仪标定已复位（回到手机原始角度）")
+            self?.settings?.refreshRemoteInfo()
+        }
+
         // 按配置启停手机遥控
         if config.remoteControl {
             relay.start()
@@ -198,13 +217,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func acceptPhoneHinge(_ angle: Double) {
         guard config.phoneGyro, angle.isFinite else { return }
         let now = CACurrentMediaTime()
+        // 手机上报的是原始姿态角，这里按面板上的标定映射成铰链角
+        let hinge = phoneGyro.ingest(raw: angle, at: now)
         if now > phoneHingeDeadline {
             status.setSensorStatus("手机陀螺仪接管中")
             NSLog("[MacKZ] 手机陀螺仪开始接管铰链角度")
         }
         phoneHingeDeadline = now + 1.5
-        engine.update(angle: angle, timestamp: now)
+        engine.update(angle: hinge, timestamp: now)
         startPhoneHingeWatchdog()
+    }
+
+    /// 执行一次手机陀螺仪标定。
+    /// 手机贴在屏幕上时读数会一直轻微晃动，晃着标定会把基准点标歪，
+    /// 所以这里强制「收到数据 + 已放稳」才允许标，否则只在面板上提示。
+    private func calibratePhoneGyro(_ action: (PhoneGyroCalibration) -> Void) {
+        guard phoneGyro.hasFreshData else {
+            settings.flashMessage("还没收到手机角度：先在手机控制页点「启用陀螺仪」")
+            return
+        }
+        guard phoneGyro.isSteady else {
+            let wobble = phoneGyro.wobble.map { String(format: "±%.1f°", $0) } ?? "读数中"
+            settings.flashMessage("手机还在晃（\(wobble)），放稳后再点标定")
+            return
+        }
+        action(phoneGyro)
+        settings.flashMessage(phoneGyro.isCalibrated ? "标定完成：\(phoneGyro.mappingText())" : "标定已复位")
+        settings.refreshRemoteInfo()
     }
 
     /// 看门狗：手机数据中断后把角度控制权交还本机传感器

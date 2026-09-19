@@ -86,11 +86,12 @@
       <button id="gyroStart">启用陀螺仪</button>
       <button id="gyroStop" class="ghost">停止</button>
     </div>
-    <div class="grid" style="margin-top:10px">
-      <button id="gyroZero" class="ghost">标定为「完全合上」</button>
+    <div style="margin-top:10px">
       <button id="gyroMount" class="ghost">贴法：屏幕背面</button>
     </div>
-    <div class="tip" id="gyroTip">第一次使用：合上 MacBook → 点「标定为完全合上」→ 再掀开屏幕，数值应从 0° 跟着变大；若数值不跟着变大，点一下「贴法」切换后再标定一次。</div>
+    <div class="tip" id="gyroTip">第一次使用：先在 Mac 的「MacKZ 设置 → 手机遥控」里打开「允许手机陀螺仪接管角度」，
+    把手机贴稳到屏幕上，再回来点「启用陀螺仪」并允许「运动与方向访问」；<b>标定（完全合上 / 完全打开 / 复位）请在 Mac 设置面板上点</b> ——
+    手机贴在屏幕上时看不到本页，标定只能在那一边操作。若数值不跟着屏幕变化，点一下「贴法」切换后再标定一次。</div>
   </div>
 
   <a class="back" href="mackz.html">← 返回配对页</a>
@@ -261,8 +262,9 @@
   }
 
   /* ---------- 陀螺仪：屏幕法线绕铰链轴旋转，重力在手机 y/z 轴上的投影直接解出开合角 ---------- */
+  // 注意：这里上报的是「原始姿态角」，不做零点偏移 —— 标定统一在 Mac 设置面板上做
+  // （手机贴在屏幕上时看不到本页，只有那边的按钮点得到）。
   var gyroMount = localStorage.getItem('mackzMount') || 'back';
-  var gyroZero = parseFloat(localStorage.getItem('mackzZero') || '0') || 0;
   var gyroLastLid = null, gyroLastSend = 0;
 
   function refreshMountLabel() {
@@ -281,12 +283,11 @@
     var g = e.accelerationIncludingGravity;
     if (!g || g.y === null || g.z === null) { return; }
     gyroLastLid = lidAngleFrom(g);
-    var angle = Math.max(0, gyroLastLid - gyroZero);
-    $('gyroAngle').textContent = Math.round(angle) + '°';
+    $('gyroAngle').textContent = Math.round(gyroLastLid) + '°';
     var now = Date.now();
     if (now - gyroLastSend < 50) { return; }             // 限流到 20Hz
     gyroLastSend = now;
-    send({ h: Number(angle.toFixed(2)) });
+    send({ h: Number(gyroLastLid.toFixed(2)) });
   }
 
   function startGyro() {
@@ -325,19 +326,11 @@
     }
   };
   $('gyroStop').onclick = stopGyro;
-  $('gyroZero').onclick = function () {
-    if (gyroLastLid === null) { $('gyroTip').textContent = '先点「启用陀螺仪」，等角度显示出来再标定。'; return; }
-    gyroZero = gyroLastLid;                              // 当前姿态记为 0°（完全合上）
-    localStorage.setItem('mackzZero', String(gyroZero));
-    $('gyroTip').textContent = '已把当前姿态标定为 0°。掀开屏幕，数值应从 0° 开始变大。';
-  };
   $('gyroMount').onclick = function () {
     gyroMount = gyroMount === 'back' ? 'front' : 'back';
     localStorage.setItem('mackzMount', gyroMount);
     refreshMountLabel();
-    gyroZero = 0;
-    localStorage.setItem('mackzZero', '0');
-    $('gyroTip').textContent = '已切换贴法并清除标定：请合上 MacBook 后重新点「标定为完全合上」。';
+    $('gyroTip').textContent = '已切换贴法：数值跟着屏幕变化就对了；不对就在 Mac 设置面板上重新标定一次。';
   };
 
   /* ---------- 入口：带 #c= 直接进控制台；否则让用户手输连接码 ---------- */
