@@ -23,7 +23,10 @@ struct Config: Codable {
 
     // MARK: 角度标定（与 DuoHinge 一致的单参数触发模型）
     /// 触发角（度）：铰链角度 ≥ 该值 → 进度 0（完全展开，不显示动画）
-    var triggerAngleDeg = 90.0
+    /// v1.11.0 起改名为「动画起点角」，默认 130°（= 完全打开）→ 特效全程跟随开合角（对齐 iPhone Duo / Mac Duo）
+    var triggerAngleDeg = 130.0
+    /// 是否已把动画起点角纠正为「全程跟随」（v1.11.0 一次性迁移标记）
+    var followAngleMigrated = false
     /// 完全合上角（度）：铰链角度 ≤ 该值 → 进度 1（玻璃完全立起）
     var closeAngleDeg = 0.0
     /// 传感器方向反转（若打开屏幕时角度反而变小，置 true）
@@ -126,6 +129,15 @@ enum ConfigStore {
             if (merged["foldDirectionMigrated"] as? Bool) != true {
                 merged["foldDirection"] = Config().foldDirection
                 merged["foldDirectionMigrated"] = true
+            }
+            // v1.11.0：特效改为「全程跟随开合角」（对齐 iPhone Duo / Mac Duo 的观感）。
+            // 旧默认值是 90°（合到 90° 以下才插手），升上来时纠正一次；
+            // 用户手动改过的其它值（不等于 90）保持不动。
+            if (merged["followAngleMigrated"] as? Bool) != true {
+                if (merged["triggerAngleDeg"] as? Double) == 90 {
+                    merged["triggerAngleDeg"] = Config().triggerAngleDeg
+                }
+                merged["followAngleMigrated"] = true
             }
             let mergedData = try JSONSerialization.data(withJSONObject: merged)
             return try JSONDecoder().decode(Config.self, from: mergedData)
