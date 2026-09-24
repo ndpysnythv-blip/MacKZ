@@ -23,7 +23,7 @@ enum FoldShader {
 
     constexpr sampler linearSampler(coord::normalized, address::clamp_to_edge, filter::linear);
 
-    // 距锚点的距离（决定膨胀量、散射与压暗的渐变基准）
+    // 距锚点的距离（决定收缩量、散射与压暗的渐变基准）
     //   corner = false：铰链在屏幕底边（参考 DuoHinge 方向）
     //   corner = true ：iPhone Duo 同款的「角落锚点」——锚点处为 0，正对角最大
     //   flip   = true 时锚点取右下角（跟随「折叠方向」做左右镜像）
@@ -161,11 +161,12 @@ enum FoldShader {
                       layer.sample(linearSampler, bluePosition / bounds.zw).b, center.a);
     }
 
-    // ---------- 备选动画：iPhone 折叠屏同款（锚点放在左下角） ----------
-    // 逆映射结构参考 MacDuo 的 Duo 效果（DhananjayBhosale/MacDuo，MIT）：
-    // 围绕「锚点」做膨胀 —— 锚点附近几乎不动，离锚点越远的内容被推得越远、最终移出画面，
-    // 再叠加随距离增长的模糊（后面两趟高斯）、压暗与完全合上时的整体渐隐。
-    // MacDuo 把锚点放在「屏幕底部中心」，这里改到「左下角」：整幅画面朝左下角方向膨胀/移走。
+    // ---------- 备选动画：iPhone 折叠屏同款（画面朝左下角缩进去） ----------
+    // 逆映射结构参考 MacDuo 的 Duo 效果（DhananjayBhosale/MacDuo，MIT）—— 都是「以锚点为中心的
+    // 逆映射 + 随距离增长的模糊 + 压暗 + 末段渐隐」，只把方向反过来用：
+    // MacDuo 是 expansion（画面往外膨胀、远端内容移出屏幕），这里是 shrink（采样半径变大 →
+    // 画面整体变小、朝锚点滑进去），锚点取「左下角」，观感就是整幅画面往左下角缩。
+    // 反方向时锚点镜像到右下角。
     float4 cornerGlass(float2 position, texture2d<float> layer, float4 bounds,
                        float progress, float darknessStrength, float flip) {
         float2 size = max(bounds.zw, float2(1.0f));
@@ -178,10 +179,10 @@ enum FoldShader {
         // 锚点跟随「折叠方向」左右镜像：默认左下角，反方向时换成右下角
         float2 anchor = flip > 0.5f ? float2(1.0f, 1.0f) : float2(0.0f, 1.0f);
         float reach = clamp(length(uv - anchor) / 1.41421f, 0.0f, 1.0f);   // 0 = 锚点，1 = 正对角
-        // 膨胀系数：随进度增长，离锚点越远增益越大（起步量 0.12、距离增益 0.56）
-        float expansion = 1.0f + t * (0.12f + 0.56f * reach);
-        // 逆映射：把采样坐标朝锚点收 → 画面围绕锚点放大，远端内容移出屏幕
-        float2 src = anchor + (uv - anchor) / expansion;
+        // 收缩系数：随进度增长，离锚点越远收缩越多（起步量 0.15、距离增益 0.75）
+        float shrink = 1.0f + t * (0.15f + 0.75f * reach);
+        // 逆映射：采样半径放大 → 画面整体变小并朝锚点（左下角）滑进去
+        float2 src = anchor + (uv - anchor) * shrink;
 
         // 压暗：远端更暗，但桌面始终可见
         float visibility = 1.0f - min(0.60f * darknessStrength, 0.80f) * smoothstep(0.35f, 1.0f, reach);
