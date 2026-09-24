@@ -86,6 +86,17 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     private var handlers: [NSObject] = []
     /// 即时生效的防抖（滑块拖动时用）
     private var commitTimer: Timer?
+    /// 主内容栈：所有分区按它的宽度等宽对齐
+    private weak var sectionStack: NSStackView?
+
+    /// 加一个分区：**等宽**（左边界与右边界都和主栈对齐，避免「一个框长一个框短」）
+    private func add(_ view: NSView) {
+        guard let stack = sectionStack else { return }
+        stack.addArrangedSubview(view)
+        let insets = stack.edgeInsets
+        view.widthAnchor.constraint(equalTo: stack.widthAnchor,
+                                    constant: -(insets.left + insets.right)).isActive = true
+    }
 
     // MARK: - 即时生效
 
@@ -177,6 +188,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     /// 排布原则：新手只需要最上面几块（总开关/权限/手机遥控/常用），
     /// 角度标定、采集性能、智能逻辑等细节全部收进可折叠的「高级设置」。
     private func buildSections(into stack: NSStackView) {
+        sectionStack = stack
 
         // ---------- 实时状态 ----------
         let status = NSTextField(labelWithString: "读取中…")
@@ -206,7 +218,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
                                             makeButton("修复权限", #selector(repairCapture)),
                                             makeButton("打开系统设置", #selector(openPrivacySettings))])
         // 顶部一个块收齐：实时状态 + 总开关 + 权限
-        stack.addArrangedSubview(sectionBox(title: "MacKZ", rows: [status, check, permissionRow]))
+        add(sectionBox(title: "MacKZ", rows: [status, check, permissionRow]))
 
         // ---------- 手机遥控 ----------
         let remoteState = NSTextField(labelWithString: "读取中…")
@@ -219,16 +231,16 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         remoteLocalState.lineBreakMode = .byTruncatingMiddle
         remoteLocalLabel = remoteLocalState
 
-        // 配对二维码：手机扫它即可打开配对页，不必再自己去官网找
+        // 配对二维码：小方块，放在操作按钮右边
         let qr = NSImageView()
         qr.imageScaling = .scaleProportionallyUpOrDown
         qr.wantsLayer = true
-        qr.layer?.cornerRadius = 8
+        qr.layer?.cornerRadius = 6
         qr.layer?.backgroundColor = NSColor.white.cgColor
         qr.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
-            qr.widthAnchor.constraint(equalToConstant: 100),
-            qr.heightAnchor.constraint(equalToConstant: 100)
+            qr.widthAnchor.constraint(equalToConstant: 68),
+            qr.heightAnchor.constraint(equalToConstant: 68)
         ])
         qrImage = qr
         let qrNote = NSTextField(wrappingLabelWithString: "二维码生成中…")
@@ -249,24 +261,11 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         gyroMap.textColor = .tertiaryLabelColor
         gyroMap.lineBreakMode = .byTruncatingTail
         gyroMappingLabel = gyroMap
-        let gyroOpen = makeButton("当前位置＝完全打开", #selector(gyroMarkOpen))
+        let gyroOpen = makeButton("标记完全打开", #selector(gyroMarkOpen))
         gyroOpenButton = gyroOpen
 
-        stack.addArrangedSubview(sectionBox(title: "手机遥控", rows: [
-            makeRow(title: "连接码", views: [remoteState]),
-            makeRow(views: [remoteLocalState]),
-            makeRow(title: "配对二维码", views: [qr, qrNote]),
-            makeRow(views: [makeButton("复制连接码", #selector(copyRemoteURL)),
-                            makeButton("打开配对页", #selector(openPairPage)),
-                            makeButton("刷新连接码", #selector(refreshRemoteURL))]),
-            switchRow("启用手机遥控", \.remoteControl),
-            switchRow("允许手机陀螺仪接管角度", \.phoneGyro),
-            makeRow(views: [gyroState]),
-            makeRow(views: [gyroMap]),
-            makeRow(views: [makeButton("陀螺仪设置引导…", #selector(openGyroSetup)),
-                            makeButton("退出陀螺仪", #selector(stopGyroSession))]),
-            makeRow(views: [gyroOpen, makeButton("复位标定", #selector(gyroMarkReset))])
-        ]))
+        // 手机遥控分区挪到「预览 / 折叠动画」之后（重要的放前面）
+
 
         // ---------- 常用（只放新手真正会调的几项） ----------
         let progressSlider = NSSlider(value: 0, minValue: 0, maxValue: 1, target: nil, action: nil)
@@ -289,7 +288,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         progressSlider.target = progressHandler
         progressSlider.action = #selector(SliderHandler.fire(_:))
 
-        stack.addArrangedSubview(sectionBox(title: "预览", rows: [
+        add(sectionBox(title: "折叠动画", rows: [
             foldStylePicker(),
             popupRow("折叠方向", \.foldDirection, options: [
                 ("up", "正向（Duo 折叠：铰链在屏幕底边 / 角落样式：左下角锚点）"),
@@ -308,11 +307,29 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
                             makeButton("复位（完全展开）", #selector(resetManual))])
         ]))
 
+        // ---------- 手机遥控（二维码贴在按钮右侧，不占一整行） ----------
+        add(sectionBox(title: "手机遥控", rows: [
+            makeRow(title: "连接码", views: [remoteState]),
+            makeRow(views: [remoteLocalState, qrNote]),
+            makeRow(views: [makeButton("复制连接码", #selector(copyRemoteURL)),
+                            makeButton("打开配对页", #selector(openPairPage)),
+                            makeButton("刷新连接码", #selector(refreshRemoteURL)),
+                            qr]),
+            switchRow("启用手机遥控", \.remoteControl),
+            switchRow("允许手机陀螺仪接管角度", \.phoneGyro),
+            makeRow(views: [gyroState]),
+            makeRow(views: [gyroMap]),
+            makeRow(views: [makeButton("陀螺仪引导…", #selector(openGyroSetup)),
+                            makeButton("退出陀螺仪", #selector(stopGyroSession)),
+                            gyroOpen,
+                            makeButton("复位标定", #selector(gyroMarkReset))])
+        ]))
+
         // ---------- 合盖与休眠 ----------
         let sleepState = NSTextField(labelWithString: "读取中…")
         sleepState.font = .systemFont(ofSize: 12)
         sleepLabel = sleepState
-        stack.addArrangedSubview(sectionBox(title: "合盖与休眠", rows: [
+        add(sectionBox(title: "合盖与休眠", rows: [
             makeRow(views: [sleepState]),
             makeRow(views: [makeButton("开启合盖不休眠", #selector(enableSleepDisabled)),
                             makeButton("恢复系统默认", #selector(disableSleepDisabled)),
@@ -320,7 +337,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         ]))
 
         // ---------- 高级设置（默认收起） ----------
-        stack.addArrangedSubview(collapsibleBox(title: "高级设置", rows: [
+        add(collapsibleBox(title: "高级设置", rows: [
             NSTextField(labelWithString: "角度标定"),
             sliderRow("完全合上角", \.closeAngleDeg, 0...180, decimals: 1, suffix: "°"),
             switchRow("反转传感器方向", \.invertAngle),
@@ -353,7 +370,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         ]))
 
         // ---------- 操作按钮（改动即时生效，没有「保存」） ----------
-        stack.addArrangedSubview(sectionBox(title: "MacKZ v\(UpdateChecker.currentVersion) · KDXZHX", rows: [
+        add(sectionBox(title: "MacKZ v\(UpdateChecker.currentVersion) · KDXZHX", rows: [
             makeRow(views: [makeButton("恢复默认", #selector(resetDefaults)),
                             makeButton("传感器探针", #selector(probe)),
                             makeButton("检查更新", #selector(checkUpdate)),
@@ -487,10 +504,10 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     /// 折叠动画选择：两个可点选的框，点一下立即生效
     private func foldStylePicker() -> NSView {
         let cards = [
-            FoldStyleCard(value: "hinge", title: "Duo 折叠",
-                          detail: "参考实现：内容往键盘侧折倒收走"),
-            FoldStyleCard(value: "corner", title: "MacDuo Duo",
-                          detail: "1:1 照搬 MacDuo 原版（底边中心放大 + 模糊）")
+            FoldStyleCard(value: "hinge", title: "玻璃折叠",
+                          detail: "画面绕转轴折起，像屏幕真的合上"),
+            FoldStyleCard(value: "corner", title: "画面外扩",
+                          detail: "画面从底边向外放大，上方内容移出屏幕")
         ]
         foldStyleCards = cards
         for card in cards {

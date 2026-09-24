@@ -23,8 +23,15 @@ final class RemoteRelay {
     /// 手机陀螺仪会话状态（"setup" = 还没设置完，手机端显示「等待 Mac 设置」；"running" = 已开始使用）
     var stateProvider: (() -> (progress: Double, angle: Double?, phoneGyro: String))?
 
-    /// 公共中转地址（实测 wss 可用；两端用同一个即可互通）
-    private static let broker = URL(string: "wss://broker.hivemq.com:8884/mqtt")!
+    /// 公共中转候选：**按同一个顺序也写进手机端**（配对链接带上下标 b），任一个通就能用。
+    /// 只挂一个地址时经常出现「手机连上了、Mac 连不上」—— 公共 broker 会按网络/地区抖动或限流。
+    private static let brokers: [URL] = [
+        URL(string: "wss://broker.hivemq.com:8884/mqtt")!,
+        URL(string: "wss://broker.emqx.io:8084/mqtt")!,
+        URL(string: "wss://test.mosquitto.org:8081")!
+    ]
+    /// 当前正在用的中转下标（写进配对链接，手机照它连，保证两端在同一个 broker 上）
+    private(set) var brokerIndex = 0
     /// 连接码字符集：去掉 0/O/1/I 等易混字符，方便对着屏幕手输
     private static let alphabet = Array("23456789ABCDEFGHJKLMNPQRSTUVWXYZ")
     /// 上报本机状态的频率（秒）
@@ -52,8 +59,11 @@ final class RemoteRelay {
         String((0..<8).map { _ in alphabet.randomElement() ?? "2" })
     }
 
-    /// 官网配对地址：连接码放在 `#` 片段里，片段不会发往服务器
-    var pairPageURL: String { code.isEmpty ? "" : "https://kdxzhx.top/mackz#c=\(code)" }
+    /// 官网配对地址：连接码放在 `#` 片段里，片段不会发往服务器；
+    /// `b` = 当前中转下标（手机端按它连同一个 broker）
+    var pairPageURL: String {
+        code.isEmpty ? "" : "https://kdxzhx.top/mackz#c=\(code)&b=\(brokerIndex)"
+    }
 
     /// 手机 → Mac 的主题（Mac 订阅）
     private var upTopic: String { "mackz/\(code)/up" }
@@ -100,7 +110,7 @@ final class RemoteRelay {
         let session = URLSession(configuration: config)
         self.session = session
 
-        let task = session.webSocketTask(with: Self.broker)
+        let task = session.webSocketTask(with: Self.brokers[brokerIndex])
         self.task = task
         task.resume()
         receiveLoop(task)                       // URLSession 会先完成握手，再把这里的报文发出去
@@ -113,12 +123,25 @@ final class RemoteRelay {
         send(packet(first: 0x10, body: body), on: task)
 
         startPing()
-        // 兜底：10 秒还没订阅成功就重来一次（公共 broker 偶发握手失败）
-        DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [weak self] in
+        // 兜底：15 秒还没订阅成功就换下一个中转（公共 broker 偶发握手失败或对某地区不通）
+        DispatchQueue.main.asyncAfter(deadline: .now() + 15) { [weak self] in
             guard let self, !self.isConnected, self.connecting else { return }
-            self.onStatus?("中转连接超时，正在重试…")
-            self.reconnectLater()
+            self.switchToNextBroker()
         }
+    }
+
+    /// 当前中转不可用：换下一个候选（手机端按配对链接里的 b 连同一个，两端始终保持一致）
+    private func switchToNextBroker() {
+        brokerIndex = (brokerIndex + 1) % Self.brokers.count
+        NSLog("[MacKZ] 中转切换：%@", Self.brokers[brokerIndex].absoluteString)
+        onStatus?("换个中转重试中…（\(Self.brokers[brokerIndex].host ?? "中转")）")
+        isConnected = false
+        connecting = false
+        task?.cancel(with: .goingAway, reason: nil)
+        session?.invalidateAndCancel()
+        task = nil
+        session = nil
+        connect()
     }
 
     /// 5 秒后重连（断线 / 超时兜底）
@@ -149,12 +172,9 @@ final class RemoteRelay {
                 }
                 self.receiveLoop(task)
             case .failure:
-                // 连接断开：清状态并退避重连
+                // 连接断开：直接换下一个中转（公共 broker 掉线很常见，退避重连往往还是同一个坏地址）
                 if self.isConnected || self.connecting {
-                    DispatchQueue.main.async {
-                        self.onStatus?("中转连接已断开，5 秒后重试")
-                        self.reconnectLater()
-                    }
+                    DispatchQueue.main.async { self.switchToNextBroker() }
                 }
             }
         }

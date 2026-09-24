@@ -105,7 +105,16 @@
    而且本页是 https，iOS 允许读取运动传感器，陀螺仪模式可用。 */
 (function () {
   var $ = function (id) { return document.getElementById(id); };
-  var BROKER = 'wss://broker.hivemq.com:8884/mqtt';
+  /* 公共中转候选：与 Mac 端同一顺序；Mac 的配对链接里带下标 b（也记在 localStorage 里）。 */
+  var BROKERS = ['wss://broker.hivemq.com:8884/mqtt',
+                 'wss://broker.emqx.io:8084/mqtt',
+                 'wss://test.mosquitto.org:8081'];
+  var BROKER = (function () {
+    var m = /[#&?]b=(\d+)/.exec(location.hash || '');
+    var i = m ? parseInt(m[1], 10) : parseInt(localStorage.getItem('mackzBroker') || '0', 10);
+    if (!(i >= 0 && i < BROKERS.length)) { i = 0; }
+    return BROKERS[i];
+  })();
 
   /* ---------- 极简 MQTT 3.1.1 over WebSocket 客户端（无第三方依赖） ---------- */
   // subTopic：订阅 Mac 回传的状态；pubTopic：把指令发回 Mac（两者必须分开，别混用）
@@ -376,7 +385,7 @@
 
   function fromURL() {
     var h = location.hash || '', v = '';
-    if (h.indexOf('#c=') === 0) { v = normalize(decodeURIComponent(h.slice(3))); }
+    if (h.indexOf('#c=') === 0) { v = normalize(decodeURIComponent(h.slice(3).split('&')[0])); }
     if (!v) {
       var m = /[?&]c=([^&]+)/.exec(location.search);
       if (m) { v = normalize(decodeURIComponent(m[1])); }
