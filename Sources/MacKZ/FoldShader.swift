@@ -23,6 +23,15 @@ enum FoldShader {
 
     constexpr sampler linearSampler(coord::normalized, address::clamp_to_edge, filter::linear);
 
+    // 距虚拟铰链的距离（决定折倒程度、散射与压暗的渐变基准）
+    //   diagonal = false：铰链在屏幕底边（参考实现方向）
+    //   diagonal = true ：铰链是「过右上角、沿左上—右下对角线」的斜轴 → 内容往左下角折倒
+    inline float hingeDistance(float2 p, float2 size, bool diagonal) {
+        if (!diagonal) return size.y - p.y;
+        // 轴方向 (1,1)/√2，法线 (-1,1)/√2（指向内容一侧，也就是左下）
+        return dot(p - float2(size.x, 0.0f), float2(-0.70711f, 0.70711f));
+    }
+
     // ---------- 第一趟：固定平面透视投影 ----------
     // 桌面保持在 z=0；只有「玻璃」绕 (y=height, z=0)（屏幕底边）旋转。
     // 对每个玻璃像素，把静止视点的射线延伸到固定桌面平面求交采样。
@@ -84,10 +93,12 @@ enum FoldShader {
     // ---------- 可分离高斯（显示坐标系） ----------
     // 两条稠密 1D 趟避免稀疏圆盘复制品破坏细小文字；相邻权重共享双线性读取。
     float4 hingeGaussian(float2 position, texture2d<float> layer, float4 bounds,
-                          float progress, float2 direction, float blurStrength, float angleScale) {
+                          float progress, float2 direction, float blurStrength, float angleScale,
+                          float diagonal) {
         float2 size = bounds.zw;
         float2 p = position - bounds.xy;
-        float distance = size.y - p.y;
+        // 斜轴样式改用「距斜轴的距离」，散射渐变方向才与折倒方向一致
+        float distance = hingeDistance(p, size, diagonal > 0.5f);
         float contact = smoothstep(size.y * 0.035f, size.y * 0.20f, distance);
         float optical = smoothstep(0.0f, 1.5f / 90.0f, progress);
         float angle = clamp(progress, 0.0f, 1.0f) * clamp(angleScale, 0.05f, 1.0f) * M_PI_F * 0.5f;
@@ -148,27 +159,51 @@ enum FoldShader {
                       layer.sample(linearSampler, bluePosition / bounds.zw).b, center.a);
     }
 
-    // ---------- 备选动画：整屏往左下角收 ----------
-    // 左下角是不动点：画面随 progress 一边缩小、一边朝左下角滑走，同时整体压暗。
-    // 与玻璃折叠（hingeGlass）互斥，由 uniform（eye.w）二选一。
-    float4 cornerShrink(float2 position, texture2d<float> layer, float4 bounds,
-                        float progress, float darknessStrength) {
-        float2 size = max(bounds.zw, float2(1.0f));
+    // ---------- 备选动画：斜轴折叠（内容往左下角折倒收走） ----------
+    // 与参考实现（DuoHinge）完全同一套射线投射，只把虚拟铰链轴从「屏幕底边」
+    // 换成「过右上角、沿左上—右下对角线」的斜轴：整块内容都在轴的左下方，
+    // 于是玻璃立起时桌面被折向左下角，观感就是「往左下角缩」。
+    float4 cornerGlass(float2 position, texture2d<float> layer, float4 bounds,
+                       float progress, float darknessStrength, float3 viewpoint) {
+        float2 size = bounds.zw;
         float2 p = position - bounds.xy;
-        float t = clamp(progress, 0.0f, 1.0f);
+        float angle = clamp(progress, 0.0f, 1.0f) * M_PI_F * 0.5f;
         // progress=0 时精确直通，避免颜色/几何跳变
-        if (t < 1e-5f) return float4(layer.sample(linearSampler, position / bounds.zw).rgb, 1.0f);
+        if (angle < 1e-5f) return float4(layer.sample(linearSampler, position / bounds.zw).rgb, 1.0f);
 
-        // 不动点：左下角（屏幕坐标 y 向下，所以左下角是 (0, height)）
-        float2 anchor = float2(0.0f, size.y);
-        // 缩到 8%：整屏内容被「收」进左下角，同时保留一点余量不至于完全消失
-        float scale = mix(1.0f, 0.08f, t);
-        float2 sample = anchor + (p - anchor) * scale;
-        // 越合越暗，完全合上时保留 35% 透过率，桌面不会整屏归黑
-        float visibility = 1.0f - min(0.65f * darknessStrength, 0.80f) * t;
-        bool inside = all(sample >= 0.0f) && all(sample < size);
-        float3 color = inside ? layer.sample(linearSampler, (bounds.xy + sample) / bounds.zw).rgb : float3(0);
-        return float4(color * visibility, 1.0f);
+        float2 axis = float2(0.70711f, 0.70711f);          // 轴方向：左上 → 右下
+        float2 axisNormal = float2(-0.70711f, 0.70711f);   // 轴法线：指向内容一侧（左下）
+        float2 anchor = float2(size.x, 0.0f);              // 轴过右上角
+        float2 relative = p - anchor;
+        float along = dot(relative, axis);                 // 沿轴位置
+        float distance = dot(relative, axisNormal);        // 距轴距离（内容侧为正）
+        // 归一化到 0~1，用于幕布压暗的渐变（最远点约 (宽+高)/√2）
+        float far = clamp(distance / max((size.x + size.y) * 0.70711f, 1.0f), 0.0f, 1.0f);
+
+        // 幕布压暗：延迟且更宽，绝不熄灭桌面；完全合上时远端保留 40% 透过率
+        float curtainProgress = smoothstep(0.20f, 1.0f, clamp(progress, 0.0f, 1.0f));
+        float feather = 0.22f;
+        float edge = mix(-feather, 0.90f, curtainProgress);
+        float curtain = 1.0f - smoothstep(edge - feather, edge + feather, far);
+        float visibility = 1.0f - min(0.60f * darknessStrength, 0.80f) * curtain;
+
+        float sine = sin(angle);
+        float cosine = cos(angle);
+        float eyeDistance = size.y * max(viewpoint.z, 1.1f);
+        float3 eye = float3(size.x * viewpoint.x, size.y * viewpoint.y, eyeDistance);
+        // 玻璃点：沿斜轴平移 + 绕斜轴立起
+        float3 glass = float3(anchor.x + axis.x * along + axisNormal.x * distance * cosine,
+                              anchor.y + axis.y * along + axisNormal.y * distance * cosine,
+                              distance * sine);
+        float depth = eye.z - glass.z;
+        if (depth <= 1e-5f) return float4(0, 0, 0, 1);
+        // 射线 eye→glass 延伸到 z=0 平面的交点
+        float rayScale = eye.z / depth;
+        float2 hit = eye.xy + (glass.xy - eye.xy) * rayScale;
+        bool inside = all(hit >= 0.0f) && all(hit < size);
+        float3 color = inside ? layer.sample(linearSampler, (bounds.xy + hit) / bounds.zw).rgb : float3(0);
+        float transmission = 1.0f - min(distance * 0.0004f, 0.015f);
+        return float4(color * transmission * visibility, 1.0f);
     }
 
     // ---------- Uniform / 顶点 ----------
@@ -185,33 +220,33 @@ enum FoldShader {
         return {float4(uv.x * 2 - 1, 1 - uv.y * 2, 0, 1), uv};
     }
 
-    // 动画样式：1 = 左下角收起（备选），0 = 玻璃折叠（默认）
+    // 动画样式：1 = 斜轴折叠（往左下角收），0 = 参考实现的底边折叠
     inline bool isCornerStyle(constant HingeUniforms &u) { return u.eye.w > 0.5f; }
 
     fragment float4 hingeProject(HingeVertex in [[stage_in]], texture2d<float> source [[texture(0)]],
                                  constant HingeUniforms &u [[buffer(0)]]) {
         if (isCornerStyle(u)) {
-            return cornerShrink(in.uv * u.geometry.xy, source, float4(0, 0, u.geometry.xy),
-                                u.geometry.z, u.optics.x);
+            return cornerGlass(in.uv * u.geometry.xy, source, float4(0, 0, u.geometry.xy),
+                               u.geometry.z, u.optics.x, u.eye.xyz);
         }
         return hingeGlass(in.uv * u.geometry.xy, source, float4(0, 0, u.geometry.xy),
                           u.geometry.z, u.geometry.w, u.optics.x, u.eye.xyz, u.optics.z, u.optics.w);
     }
     fragment float4 hingeBlurX(HingeVertex in [[stage_in]], texture2d<float> source [[texture(0)]],
                                constant HingeUniforms &u [[buffer(0)]]) {
-        // 左下角收起走的是纯缩放，不做玻璃散射（那套几何是按铰链高度算的，套上去会糊错地方）
-        if (isCornerStyle(u)) return float4(source.sample(linearSampler, in.uv).rgb, 1.0f);
         return hingeGaussian(in.uv * u.geometry.xy, source, float4(0, 0, u.geometry.xy),
-                             u.geometry.z, float2(1, 0), u.geometry.w, u.optics.z);
+                             u.geometry.z, float2(1, 0), u.geometry.w, u.optics.z,
+                             isCornerStyle(u) ? 1.0f : 0.0f);
     }
     fragment float4 hingeBlurY(HingeVertex in [[stage_in]], texture2d<float> source [[texture(0)]],
                                constant HingeUniforms &u [[buffer(0)]]) {
-        if (isCornerStyle(u)) return float4(source.sample(linearSampler, in.uv).rgb, 1.0f);
         return hingeGaussian(in.uv * u.geometry.xy, source, float4(0, 0, u.geometry.xy),
-                             u.geometry.z, float2(0, 1), u.geometry.w, u.optics.z);
+                             u.geometry.z, float2(0, 1), u.geometry.w, u.optics.z,
+                             isCornerStyle(u) ? 1.0f : 0.0f);
     }
     fragment float4 hingeDispersion(HingeVertex in [[stage_in]], texture2d<float> source [[texture(0)]],
                                      constant HingeUniforms &u [[buffer(0)]]) {
+        // 色散是按「底边铰链」的径向算的，斜轴样式下不适用，直接跳过
         if (isCornerStyle(u)) return float4(source.sample(linearSampler, in.uv).rgb, 1.0f);
         return hingeChromatic(in.uv * u.geometry.xy, source, float4(0, 0, u.geometry.xy),
                               u.geometry.z, u.optics.y, u.optics.w);

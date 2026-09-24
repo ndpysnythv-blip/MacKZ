@@ -87,7 +87,7 @@ final class MacKZDialog: NSObject, NSWindowDelegate {
                                       height: CGFloat.greatestFiniteMagnitude)
             textView.textContainer?.widthTracksTextView = true
             textView.textContainer?.containerSize = NSSize(width: scroll.contentSize.width,
-                                                           height: .greatestFiniteMagnitude)
+                                                           height: CGFloat.greatestFiniteMagnitude)
             textView.string = MacKZDialog.plainText(fromMarkdown: trimmedNotes)
             scroll.documentView = textView
             NSLayoutConstraint.activate([
