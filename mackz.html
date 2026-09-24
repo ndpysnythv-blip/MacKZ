@@ -212,7 +212,7 @@
       <span class="badge">作者 KDXZHX</span>
       <span class="badge">macOS 14+ / Apple Silicon</span>
       <span class="badge">开源免费</span>
-      <span class="badge">v1.14.0</span>
+      <span class="badge">v1.16.1</span>
     </div>
     <div class="cta">
       <a class="btn primary" href="#install">一键安装</a>
@@ -441,30 +441,12 @@
   var $ = function (id) { return document.getElementById(id); };
   if (!$('mzCode')) { return; }
 
-  /* 公共中转候选：与 Mac 端保持同一顺序。
-     Mac 会把「它正在用的中转下标 b」写进配对链接，两端必须在同一个 broker 上，
-     否则就会出现「手机显示已连接、Mac 一直连不上」。 */
-  var BROKERS = ['wss://broker.hivemq.com:8884/mqtt',
-                 'wss://mqtt.eclipseprojects.io:443/mqtt',
-                 'wss://broker.emqx.io:8084/mqtt',
-                 'wss://test.mosquitto.org:8081'];
-  var BROKER = (function () {
-    var m = /[#&?]b=(\d+)/.exec(location.hash || '');
-    var i = m ? parseInt(m[1], 10) : parseInt(localStorage.getItem('mackzBroker') || '0', 10);
-    if (!(i >= 0 && i < BROKERS.length)) { i = 0; }
-    try { localStorage.setItem('mackzBroker', String(i)); } catch (e) {}
-    return BROKERS[i];
-  })();
-
-  /* 注意：不要再写「多个 socket 共用一个 MQTT 会话」的封装。
-     每条 socket 必须各跑一条独立会话，否则后开的 socket 会把 CONNECT 重发到
-     已经握完手的 socket 上，重复 CONNECT 属于协议违规，broker 会直接踢连接。 */
+  var BROKER = 'wss://broker.hivemq.com:8884/mqtt';
 
   /* ---------- 极简 MQTT 3.1.1 over WebSocket 客户端（无第三方依赖） ---------- */
   // subTopic：订阅 Mac 回传的状态；pubTopic：把指令发回 Mac（两者必须分开，别混用）
-  function mqttConnect(url, clientId, subTopic, pubTopic, handlers) {
-    var ws = null, buf = new Uint8Array(0), pingTimer = null, retryTimer = null,
-        closedByUs = false, connected = false;
+  function mqttConnect(clientId, subTopic, pubTopic, handlers) {
+    var ws = null, buf = new Uint8Array(0), pingTimer = null, retryTimer = null, closedByUs = false;
 
     function str(s) {
       var b = new TextEncoder().encode(s), o = new Uint8Array(b.length + 2);
@@ -499,8 +481,8 @@
       if (type === 2) {                                   // CONNACK
         doSubscribe();
         pingTimer = setInterval(function () { send(new Uint8Array([0xC0, 0x00])); }, 30000);
-      } else if (type === 9) {                             // SUBACK：本条连接可用
-        if (!connected) { connected = true; handlers.onUp(); }
+      } else if (type === 9) {                             // SUBACK
+        handlers.onStatus('connected');
       } else if (type === 3) {                             // PUBLISH
         var qos = (first >> 1) & 3;
         var tlen = (body[0] << 8) | body[1];
@@ -526,21 +508,18 @@
 
     function open() {
       closedByUs = false;
-      connected = false;
-      buf = new Uint8Array(0);
-      ws = new WebSocket(url, 'mqtt');
+      ws = new WebSocket(BROKER, 'mqtt');
       ws.binaryType = 'arraybuffer';
-      // 关键：MQTT CONNECT 必须在**本条 socket 握手完成之后**才发，且每条连接只发一次
       ws.onopen = function () {
         var vh = concat([str('MQTT'), new Uint8Array([4, 2, 0, 60])]);
         send(packet(0x10, concat([vh, str(clientId)])));
       };
       ws.onmessage = function (e) { feed(new Uint8Array(e.data)); };
-      ws.onerror = function () { };
+      ws.onerror = function () { handlers.onStatus('error'); };
       ws.onclose = function () {
         if (pingTimer) { clearInterval(pingTimer); pingTimer = null; }
         if (closedByUs) { return; }
-        if (connected) { connected = false; handlers.onDown(); }
+        handlers.onStatus('closed');
         if (retryTimer) { clearTimeout(retryTimer); }
         retryTimer = setTimeout(open, 5000);              // 断线 5 秒后自动重连
       };
@@ -550,37 +529,6 @@
     return {
       publish: pub,
       close: function () { closedByUs = true; if (retryTimer) { clearTimeout(retryTimer); } if (ws) { ws.close(); } }
-    };
-  }
-
-  /* 同时连所有候选中转：每条 socket 各跑一条独立 MQTT 会话，任一条可用即可互通。
-     发布时全部发一遍，收到重复内容自动丢弃。 */
-  function MultiMQTT(clientId, subTopic, pubTopic, handlers) {
-    var clients = [], alive = 0, up = false, lastMsg = '', lastAt = 0;
-
-    function refresh() {
-      var was = up;
-      up = alive > 0;
-      if (up !== was) { handlers.onStatus(up ? 'connected' : 'closed'); }
-    }
-
-    BROKERS.forEach(function (brokerURL) {
-      clients.push(mqttConnect(brokerURL, clientId, subTopic, pubTopic, {
-        onUp: function () { alive++; refresh(); },
-        onDown: function () { if (alive > 0) { alive--; } refresh(); },
-        onMessage: function (msg) {
-          // 多条线路会收到同一份内容：120 毫秒内重复的丢掉
-          var now = Date.now();
-          if (msg === lastMsg && now - lastAt < 120) { return; }
-          lastMsg = msg; lastAt = now;
-          handlers.onMessage(msg);
-        }
-      }));
-    });
-
-    return {
-      publish: function (msg) { for (var i = 0; i < clients.length; i++) { clients[i].publish(msg); } },
-      close: function () { for (var i = 0; i < clients.length; i++) { clients[i].close(); } }
     };
   }
 
@@ -616,7 +564,7 @@
   function connect() {
     if (client) { client.close(); client = null; }
     setPill('连接中…', 'warn');
-    client = MultiMQTT('mackz-web-' + Math.random().toString(36).slice(2, 9), downTopic(), upTopic(), {
+    client = mqttConnect('mackz-web-' + Math.random().toString(36).slice(2, 9), downTopic(), upTopic(), {
       onStatus: function (st) {
         if (st === 'connected') { setPill('已连接', 'ok'); }
         else if (st === 'closed' || st === 'error') { setPill('已断开，5 秒后重连', 'warn'); }
@@ -679,7 +627,7 @@
   function fromHash() {
     var h = location.hash || '';
     if (h.indexOf('#c=') !== 0) { return; }
-    var v = normalize(decodeURIComponent(h.slice(3).split('&')[0]));
+    var v = normalize(decodeURIComponent(h.slice(3)));
     if (v) { showPaired(v); }
   }
   fromHash();
