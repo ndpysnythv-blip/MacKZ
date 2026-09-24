@@ -62,18 +62,37 @@ final class MacKZDialog: NSObject, NSWindowDelegate {
 
         let trimmedNotes = (notes ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmedNotes.isEmpty {
-            let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 420, height: 120))
+            // 固定尺寸的滚动区。
+            // 注意：NSStackView 会接管 arranged subview 的约束，滚动视图没有自己的固有尺寸，
+            // 不给高宽的话高度会塌成 0 —— 表现就是「弹窗里只看到标题，更新内容一个字都不显示」。
+            let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 420, height: 160))
+            scroll.translatesAutoresizingMaskIntoConstraints = false
             scroll.hasVerticalScroller = true
             scroll.borderType = .bezelBorder
             scroll.drawsBackground = true
-            let textView = NSTextView(frame: scroll.bounds)
+
+            let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 420, height: 160))
             textView.isEditable = false
             textView.isSelectable = true
             textView.drawsBackground = false
             textView.font = .systemFont(ofSize: 11)
             textView.textContainerInset = NSSize(width: 6, height: 6)
-            textView.string = trimmedNotes
+            // NSTextView 放进 NSScrollView 的标准配置：宽度跟随、高度自由增长，
+            // 否则长文本既不换行也不显示
+            textView.isVerticallyResizable = true
+            textView.isHorizontallyResizable = false
+            textView.autoresizingMask = [.width]
+            textView.minSize = NSSize(width: 0, height: 0)
+            textView.maxSize = NSSize(width: .greatestFiniteMagnitude, height: .greatestFiniteMagnitude)
+            textView.textContainer?.widthTracksTextView = true
+            textView.textContainer?.containerSize = NSSize(width: scroll.contentSize.width,
+                                                           height: .greatestFiniteMagnitude)
+            textView.string = MacKZDialog.plainText(fromMarkdown: trimmedNotes)
             scroll.documentView = textView
+            NSLayoutConstraint.activate([
+                scroll.widthAnchor.constraint(equalToConstant: 420),
+                scroll.heightAnchor.constraint(equalToConstant: 160)
+            ])
             rows.append(scroll)
         }
 
@@ -130,6 +149,15 @@ final class MacKZDialog: NSObject, NSWindowDelegate {
     }
 
     // MARK: - 交互
+
+    /// Release 说明是 Markdown：这里只做轻量清理（去掉 ** 加粗、# 标题符、引用符），保持原文可读
+    private static func plainText(fromMarkdown text: String) -> String {
+        text.replacingOccurrences(of: "**", with: "")
+            .replacingOccurrences(of: "### ", with: "")
+            .replacingOccurrences(of: "## ", with: "")
+            .replacingOccurrences(of: "# ", with: "")
+            .replacingOccurrences(of: "> ", with: "")
+    }
 
     @objc private func buttonTapped(_ sender: NSButton) {
         finish(sender.tag)

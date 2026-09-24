@@ -309,8 +309,8 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         stack.addArrangedSubview(sectionBox(title: "常用设置", rows: [
             foldStylePicker(),
             popupRow("折叠方向", \.foldDirection, options: [
-                ("down", "向下收（内容折向屏幕下方，推荐）"),
-                ("up", "向上收（参考实现原始方向）")
+                ("up", "参考实现方向（铰链在屏幕底边，内容折向键盘侧收走，推荐）"),
+                ("down", "反方向（铰链在屏幕顶边，内容往屏幕上方抽走）")
             ]),
             sliderRow("开始折叠角", \.triggerAngleDeg, 0...180, decimals: 1, suffix: "°"),
             popupRow("视觉风格", \.visualStyle, options: [
@@ -516,8 +516,8 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     /// 与其它控件一样只写内存副本，点「保存并应用」才落盘。
     private func foldStylePicker() -> NSView {
         let cards = [
-            FoldStyleCard(value: "hinge", title: "① 上下折叠",
-                          detail: "画面绕屏幕边折起收走（磨砂玻璃观感，默认）"),
+            FoldStyleCard(value: "hinge", title: "① Duo 折叠（参考实现）",
+                          detail: "复刻 iPhone Duo 的透视折叠：内容往键盘侧折倒收走"),
             FoldStyleCard(value: "corner", title: "② 左下角收起",
                           detail: "整屏一边缩小一边往左下角滑走")
         ]

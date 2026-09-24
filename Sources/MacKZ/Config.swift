@@ -56,9 +56,12 @@ struct Config: Codable {
     var viewpoint = "desk"
     /// 玻璃完全立起时的角度（度）。90 = 与参考实现完全一致；调小可让完全折上时仍保留画面（末端不会整屏归黑）
     var foldAngleDeg = 90.0
-    /// 折叠方向：down = 铰链在屏幕顶边、画面内容向屏幕下方收（默认）；up = 参考实现的原始方向（内容向上抽走）
-    var foldDirection = "down"
-    /// 折叠动画样式：hinge = 玻璃绕屏幕边折叠（默认）；corner = 整屏一边缩小一边往左下角收
+    /// 折叠方向：up = 参考实现（DuoHinge）方向，铰链在屏幕底边、内容折向键盘侧收走（默认）；
+    /// down = 铰链在屏幕顶边、内容往屏幕上方抽走（反方向）
+    var foldDirection = "up"
+    /// 折叠方向是否已纠正为参考实现方向（v1.10.1 一次性迁移标记，用户不必了解）
+    var foldDirectionMigrated = false
+    /// 折叠动画样式：hinge = 玻璃透视折叠（参考实现）；corner = 整屏一边缩小一边往左下角收
     var foldStyle = "hinge"
     /// 是否显示进度角标
     var showBadge = true
@@ -116,7 +119,14 @@ enum ConfigStore {
             let baseData = try JSONEncoder().encode(defaults)
             let base = (try JSONSerialization.jsonObject(with: baseData)) as? [String: Any] ?? [:]
             // 用户值覆盖默认值，再整体解码，保证缺字段时依然可用
-            let merged = base.merging(user) { _, new in new }
+            var merged = base.merging(user) { _, new in new }
+            // v1.10.1 修正：此前的默认折叠方向与参考实现（DuoHinge）相反，
+            // 升上来的老配置里存的仍是那个旧默认值，这里纠正一次；
+            // 用户之后再手动改方向不会被反复覆盖（标记已落盘）。
+            if (merged["foldDirectionMigrated"] as? Bool) != true {
+                merged["foldDirection"] = Config().foldDirection
+                merged["foldDirectionMigrated"] = true
+            }
             let mergedData = try JSONSerialization.data(withJSONObject: merged)
             return try JSONDecoder().decode(Config.self, from: mergedData)
         } catch {
