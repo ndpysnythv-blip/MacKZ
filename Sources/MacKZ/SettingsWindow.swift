@@ -295,7 +295,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
                 ("up", "参考实现方向（铰链在屏幕底边，内容折向键盘侧收走，推荐）"),
                 ("down", "反方向（铰链在屏幕顶边，内容往屏幕上方抽走）")
             ]),
-            sliderRow("开始折叠角", \.triggerAngleDeg, 0...180, decimals: 1, suffix: "°"),
+            sliderRow("动画起点角", \.triggerAngleDeg, 0...180, decimals: 1, suffix: "°"),
             popupRow("视觉风格", \.visualStyle, options: [
                 ("clear", "Clear · 轻模糊"),
                 ("frosted", "Frosted · 磨砂玻璃（默认）"),
