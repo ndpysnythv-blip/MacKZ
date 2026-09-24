@@ -292,8 +292,8 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         stack.addArrangedSubview(sectionBox(title: "预览", rows: [
             foldStylePicker(),
             popupRow("折叠方向", \.foldDirection, options: [
-                ("up", "参考实现方向（铰链在屏幕底边，内容折向键盘侧收走，推荐）"),
-                ("down", "反方向（铰链在屏幕顶边，内容往屏幕上方抽走）")
+                ("up", "正向（Duo 折叠：铰链在屏幕底边 / 角落样式：左下角锚点）"),
+                ("down", "反方向（Duo 折叠：铰链在屏幕顶边 / 角落样式：右下角锚点）")
             ]),
             sliderRow("动画起点角", \.triggerAngleDeg, 0...180, decimals: 1, suffix: "°"),
             popupRow("视觉风格", \.visualStyle, options: [

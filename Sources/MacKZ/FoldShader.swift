@@ -25,11 +25,13 @@ enum FoldShader {
 
     // 距锚点的距离（决定膨胀量、散射与压暗的渐变基准）
     //   corner = false：铰链在屏幕底边（参考 DuoHinge 方向）
-    //   corner = true ：iPhone Duo 同款的「左下角锚点」——左下角为 0，右上角最大
-    inline float hingeDistance(float2 p, float2 size, bool corner) {
+    //   corner = true ：iPhone Duo 同款的「角落锚点」——锚点处为 0，正对角最大
+    //   flip   = true 时锚点取右下角（跟随「折叠方向」做左右镜像）
+    inline float hingeDistance(float2 p, float2 size, bool corner, float flip) {
         if (!corner) return size.y - p.y;
         float2 uv = p / max(size, float2(1.0f));
-        return length(uv - float2(0.0f, 1.0f)) * size.y;   // 折算成像素尺度，复用原有散射公式
+        float2 anchor = flip > 0.5f ? float2(1.0f, 1.0f) : float2(0.0f, 1.0f);
+        return length(uv - anchor) * size.y;   // 折算成像素尺度，复用原有散射公式
     }
 
     // ---------- 第一趟：固定平面透视投影 ----------
@@ -94,11 +96,11 @@ enum FoldShader {
     // 两条稠密 1D 趟避免稀疏圆盘复制品破坏细小文字；相邻权重共享双线性读取。
     float4 hingeGaussian(float2 position, texture2d<float> layer, float4 bounds,
                           float progress, float2 direction, float blurStrength, float angleScale,
-                          float diagonal) {
+                          float diagonal, float flip) {
         float2 size = bounds.zw;
         float2 p = position - bounds.xy;
         // 左下角样式改用「距锚点的距离」，散射渐变方向才与膨胀方向一致
-        float distance = hingeDistance(p, size, diagonal > 0.5f);
+        float distance = hingeDistance(p, size, diagonal > 0.5f, flip);
         float contact = smoothstep(size.y * 0.035f, size.y * 0.20f, distance);
         float optical = smoothstep(0.0f, 1.5f / 90.0f, progress);
         float angle = clamp(progress, 0.0f, 1.0f) * clamp(angleScale, 0.05f, 1.0f) * M_PI_F * 0.5f;
@@ -165,7 +167,7 @@ enum FoldShader {
     // 再叠加随距离增长的模糊（后面两趟高斯）、压暗与完全合上时的整体渐隐。
     // MacDuo 把锚点放在「屏幕底部中心」，这里改到「左下角」：整幅画面朝左下角方向膨胀/移走。
     float4 cornerGlass(float2 position, texture2d<float> layer, float4 bounds,
-                       float progress, float darknessStrength, float3 viewpoint) {
+                       float progress, float darknessStrength, float flip) {
         float2 size = max(bounds.zw, float2(1.0f));
         float2 p = position - bounds.xy;
         float t = clamp(progress, 0.0f, 1.0f);
@@ -173,8 +175,9 @@ enum FoldShader {
         if (t < 1e-5f) return float4(layer.sample(linearSampler, position / bounds.zw).rgb, 1.0f);
 
         float2 uv = p / size;                                              // 采样坐标（y 向下）
-        float2 anchor = float2(0.0f, 1.0f);                                // 锚点：左下角
-        float reach = clamp(length(uv - anchor) / 1.41421f, 0.0f, 1.0f);   // 0 = 左下角，1 = 右上角
+        // 锚点跟随「折叠方向」左右镜像：默认左下角，反方向时换成右下角
+        float2 anchor = flip > 0.5f ? float2(1.0f, 1.0f) : float2(0.0f, 1.0f);
+        float reach = clamp(length(uv - anchor) / 1.41421f, 0.0f, 1.0f);   // 0 = 锚点，1 = 正对角
         // 膨胀系数：随进度增长，离锚点越远增益越大（起步量 0.12、距离增益 0.56）
         float expansion = 1.0f + t * (0.12f + 0.56f * reach);
         // 逆映射：把采样坐标朝锚点收 → 画面围绕锚点放大，远端内容移出屏幕
@@ -210,7 +213,7 @@ enum FoldShader {
                                  constant HingeUniforms &u [[buffer(0)]]) {
         if (isCornerStyle(u)) {
             return cornerGlass(in.uv * u.geometry.xy, source, float4(0, 0, u.geometry.xy),
-                               u.geometry.z, u.optics.x, u.eye.xyz);
+                               u.geometry.z, u.optics.x, u.optics.w);
         }
         return hingeGlass(in.uv * u.geometry.xy, source, float4(0, 0, u.geometry.xy),
                           u.geometry.z, u.geometry.w, u.optics.x, u.eye.xyz, u.optics.z, u.optics.w);
@@ -219,13 +222,13 @@ enum FoldShader {
                                constant HingeUniforms &u [[buffer(0)]]) {
         return hingeGaussian(in.uv * u.geometry.xy, source, float4(0, 0, u.geometry.xy),
                              u.geometry.z, float2(1, 0), u.geometry.w, u.optics.z,
-                             isCornerStyle(u) ? 1.0f : 0.0f);
+                             isCornerStyle(u) ? 1.0f : 0.0f, u.optics.w);
     }
     fragment float4 hingeBlurY(HingeVertex in [[stage_in]], texture2d<float> source [[texture(0)]],
                                constant HingeUniforms &u [[buffer(0)]]) {
         return hingeGaussian(in.uv * u.geometry.xy, source, float4(0, 0, u.geometry.xy),
                              u.geometry.z, float2(0, 1), u.geometry.w, u.optics.z,
-                             isCornerStyle(u) ? 1.0f : 0.0f);
+                             isCornerStyle(u) ? 1.0f : 0.0f, u.optics.w);
     }
     fragment float4 hingeDispersion(HingeVertex in [[stage_in]], texture2d<float> source [[texture(0)]],
                                      constant HingeUniforms &u [[buffer(0)]]) {
