@@ -3,8 +3,8 @@ import AppKit
 /// MacKZ 可视化设置面板（App 内直接调参，无需手改 config.json）。
 /// 设计要点：
 /// - 纯代码构建 UI，不依赖 xib / storyboard，自动适配深浅色；
-/// - 拖动滑杆只修改内存副本，点「保存并应用」才写盘并热生效，避免频繁磁盘 IO；
-/// - 顶部实时显示铰链角度、状态机阶段与屏幕录制权限，权限缺失时可直接申请。
+/// - **任何改动即时生效**（写盘 + 热重载），滑块拖动做 0.3 秒防抖，避免频繁磁盘 IO；
+/// - 面板只保留状态与操作，不放长篇说明。
 final class SettingsWindowController: NSObject, NSWindowDelegate {
 
     // MARK: - 对外回调（由 AppDelegate 注入）
@@ -84,6 +84,25 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     private var timer: Timer?
     /// NSControl.target 是弱引用，这里强引用住所有回调持有者，防止被释放
     private var handlers: [NSObject] = []
+    /// 即时生效的防抖（滑块拖动时用）
+    private var commitTimer: Timer?
+
+    // MARK: - 即时生效
+
+    /// 任何改动立刻写盘并热重载（由 AppDelegate 的 onApply 完成），不再需要「保存并应用」
+    private func commit() {
+        commitTimer?.invalidate()
+        commitTimer = nil
+        apply()
+    }
+
+    /// 连续型控件（滑块）用：停手 0.3 秒后才提交，避免拖动过程中反复写盘/重启传感器
+    private func commitSoon() {
+        commitTimer?.invalidate()
+        commitTimer = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: false) { [weak self] _ in
+            self?.commit()
+        }
+    }
 
     init(config: Config) {
         self.config = config
@@ -164,18 +183,19 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         status.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
         status.textColor = .labelColor
         statusLabel = status
-        stack.addArrangedSubview(sectionBox(title: "实时状态", rows: [status]))
 
         // ---------- 总开关（最常用，放最前） ----------
         let check = NSButton(checkboxWithTitle: "启用 MacKZ（全局折叠动画）", target: nil, action: nil)
         check.state = config.enabled ? .on : .off
         check.font = .systemFont(ofSize: 13, weight: .medium)
-        let checkHandler = BoolHandler { [weak self] on in self?.config.enabled = on }
+        let checkHandler = BoolHandler { [weak self] on in
+            self?.config.enabled = on
+            self?.commit()
+        }
         check.target = checkHandler
         check.action = #selector(BoolHandler.fire(_:))
         handlers.append(checkHandler)
         enabledCheck = check
-        stack.addArrangedSubview(sectionBox(title: "总开关", rows: [check]))
 
         // ---------- 权限 ----------
         let capture = NSTextField(labelWithString: "检测中…")
@@ -185,12 +205,8 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
                                             makeButton("申请授权", #selector(requestCapture)),
                                             makeButton("修复权限", #selector(repairCapture)),
                                             makeButton("打开系统设置", #selector(openPrivacySettings))])
-        let tip = NSTextField(wrappingLabelWithString:
-            "实时桌面重投影需要「屏幕录制」权限，首次授权后必须重启 MacKZ 才生效。\n若设置里已勾选却仍显示未授权（更新后常见），点「修复权限」清除过期记录后重新授权。")
-        tip.font = .systemFont(ofSize: 11)
-        tip.textColor = .tertiaryLabelColor
-        tip.preferredMaxLayoutWidth = 520
-        stack.addArrangedSubview(sectionBox(title: "权限", rows: [permissionRow, tip]))
+        // 顶部一个块收齐：实时状态 + 总开关 + 权限
+        stack.addArrangedSubview(sectionBox(title: "MacKZ", rows: [status, check, permissionRow]))
 
         // ---------- 手机遥控 ----------
         let remoteState = NSTextField(labelWithString: "读取中…")
@@ -221,29 +237,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         qrNote.preferredMaxLayoutWidth = 240
         qrHint = qrNote
 
-        let remoteTip = NSTextField(wrappingLabelWithString:
-            "用法：\n"
-            + "① 手机扫面板上的二维码（或在 Mac 上点「打开配对页」），直接打开 kdxzhx.top/mackz 的配对区块；\n"
-            + "② 配对成功那一屏只留一个「进入控制中心」按钮，点它才进入遥控界面；\n"
-            + "③ 控制中心里可以：合上 / 打开 / 播放一次开合 / 拖进度，陀螺仪模式也能用。\n\n"
-            + "为什么走官网：iOS 只在 https 页面才开放陀螺仪，而 https 页面被浏览器禁止直接访问局域网的 http 地址。\n"
-            + "所以 Mac 主动连一个公共中转（只传指令和角度数字，房间号就是这次随机生成的连接码），"
-            + "手机在官网页面上通过中转和 Mac 对话 —— 手机和 Mac 甚至不必在同一个 Wi-Fi。\n\n"
-            + "下面那行「本地直连」是备用路径：中转连不上时，手机和 Mac 在同一 Wi-Fi 下打开它也能控制（但没有陀螺仪）。")
-        remoteTip.font = .systemFont(ofSize: 11)
-        remoteTip.textColor = .tertiaryLabelColor
-        remoteTip.preferredMaxLayoutWidth = 500
-        // 陀螺仪用法说明：手机没有铰链传感器也能靠姿态角驱动折叠动画
-        let gyroTip = NSTextField(wrappingLabelWithString:
-            "陀螺仪模式：把手机竖着贴（或用皮筋绑）在 MacBook 屏幕上、手机顶部朝屏幕顶边，"
-            + "在手机控制页点「启用陀螺仪」并允许「运动与方向访问」，手机姿态角就会实时换算成屏幕开合角，"
-            + "替代本机铰链传感器 —— 适合没有 Lid Angle Sensor 的机型。\n"
-            + "标定推荐直接点「手机陀螺仪设置引导…」，跟着弹窗走两步（先把手机固定在屏幕上 → 再把屏幕开到最大）即可；"
-            + "只标「开到最大」这一点就够：合上时屏幕全黑点不了按钮，0° 那端由 MacBook 固定的开合尺度推算。\n"
-            + "手机锁屏或切到后台会自动交回本机传感器；官网是 https 页面，符合 iOS 对「安全上下文」的要求，所以陀螺仪能正常读数。")
-        gyroTip.font = .systemFont(ofSize: 11)
-        gyroTip.textColor = .tertiaryLabelColor
-        gyroTip.preferredMaxLayoutWidth = 500
+        // 面板只留状态与操作，长篇说明已移除
 
         // 手机陀螺仪标定：手机贴（绑）在屏幕上时看不到手机画面，标定只能在这边点
         let gyroState = NSTextField(labelWithString: "手机姿态：未收到数据")
@@ -258,11 +252,8 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         let gyroOpen = makeButton("当前位置＝完全打开", #selector(gyroMarkOpen))
         gyroOpenButton = gyroOpen
 
-        // 这两段说明很长，默认折叠，需要时点标题展开，避免把面板撑得过长
-        let remoteHelp = collapsibleBox(title: "更多介绍", rows: [remoteTip, gyroTip])
-
-        stack.addArrangedSubview(sectionBox(title: "手机遥控（手机扫码配对）", rows: [
-            makeRow(views: [remoteState]),
+        stack.addArrangedSubview(sectionBox(title: "手机遥控", rows: [
+            makeRow(title: "连接码", views: [remoteState]),
             makeRow(views: [remoteLocalState]),
             makeRow(title: "配对二维码", views: [qr, qrNote]),
             makeRow(views: [makeButton("复制连接码", #selector(copyRemoteURL)),
@@ -272,10 +263,9 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             switchRow("允许手机陀螺仪接管角度", \.phoneGyro),
             makeRow(views: [gyroState]),
             makeRow(views: [gyroMap]),
-            makeRow(views: [makeButton("手机陀螺仪设置引导…", #selector(openGyroSetup)),
-                            makeButton("退出手机陀螺仪", #selector(stopGyroSession))]),
-            makeRow(views: [gyroOpen, makeButton("复位标定", #selector(gyroMarkReset))]),
-            remoteHelp
+            makeRow(views: [makeButton("陀螺仪设置引导…", #selector(openGyroSetup)),
+                            makeButton("退出陀螺仪", #selector(stopGyroSession))]),
+            makeRow(views: [gyroOpen, makeButton("复位标定", #selector(gyroMarkReset))])
         ]))
 
         // ---------- 常用（只放新手真正会调的几项） ----------
@@ -299,14 +289,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         progressSlider.target = progressHandler
         progressSlider.action = #selector(SliderHandler.fire(_:))
 
-        let commonTip = NSTextField(wrappingLabelWithString:
-            "① 折叠动画：两个框二选一（上下折叠 / 左下角收起）；② 折叠方向：决定画面是往屏幕下方还是上方收；"
-            + "③ 开始折叠角：铰链角度低于它才出现动画（默认 90°）；"
-            + "④ 视觉风格：磨砂玻璃观感；⑤ 下面的滑块与按钮可随时预览动画（不依赖铰链传感器）。")
-        commonTip.font = .systemFont(ofSize: 11)
-        commonTip.textColor = .tertiaryLabelColor
-        commonTip.preferredMaxLayoutWidth = 520
-        stack.addArrangedSubview(sectionBox(title: "常用设置", rows: [
+        stack.addArrangedSubview(sectionBox(title: "预览", rows: [
             foldStylePicker(),
             popupRow("折叠方向", \.foldDirection, options: [
                 ("up", "参考实现方向（铰链在屏幕底边，内容折向键盘侧收走，推荐）"),
@@ -322,29 +305,18 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             makeRow(views: [makeButton("模拟合上", #selector(simulateClose)),
                             makeButton("模拟打开", #selector(simulateOpen)),
                             makeButton("播放一次开合", #selector(demo)),
-                            makeButton("复位（完全展开）", #selector(resetManual))]),
-            commonTip
+                            makeButton("复位（完全展开）", #selector(resetManual))])
         ]))
 
         // ---------- 合盖与休眠 ----------
         let sleepState = NSTextField(labelWithString: "读取中…")
         sleepState.font = .systemFont(ofSize: 12)
         sleepLabel = sleepState
-        let sleepTip = NSTextField(wrappingLabelWithString:
-            "合盖后系统默认立刻休眠，开盖要输密码，折叠动画会发生在锁屏之下——等于白做。\n"
-            + "点「开启合盖不休眠」后系统合盖仍继续运行（显示器照常关闭），开盖不会因休眠弹锁屏，动画即可正常播放。"
-            + "该设置是系统级的，需要一次性管理员授权。\n"
-            + "注意：合盖后机器仍在耗电发热，放进包里请点「恢复系统默认」。"
-            + "若开盖仍要求输密码，那是「锁定屏幕」的策略，点第三个按钮把「关闭显示器后需要密码」改为「永不」。")
-        sleepTip.font = .systemFont(ofSize: 11)
-        sleepTip.textColor = .tertiaryLabelColor
-        sleepTip.preferredMaxLayoutWidth = 520
-        stack.addArrangedSubview(sectionBox(title: "合盖与休眠（让开合动画不被锁屏吞掉）", rows: [
+        stack.addArrangedSubview(sectionBox(title: "合盖与休眠", rows: [
             makeRow(views: [sleepState]),
             makeRow(views: [makeButton("开启合盖不休眠", #selector(enableSleepDisabled)),
-                            makeButton("恢复系统默认（合盖即休眠）", #selector(disableSleepDisabled)),
-                            makeButton("打开「锁定屏幕」设置", #selector(openLockScreenSettings))]),
-            sleepTip
+                            makeButton("恢复系统默认", #selector(disableSleepDisabled)),
+                            makeButton("锁定屏幕设置", #selector(openLockScreenSettings))])
         ]))
 
         // ---------- 高级设置（默认收起） ----------
@@ -380,14 +352,12 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             switchRow("启动时自动检查更新", \.autoCheckUpdate)
         ]))
 
-        // ---------- 操作按钮 ----------
-        stack.addArrangedSubview(sectionBox(title: "操作（当前版本 \(UpdateChecker.currentVersion) · 作者 KDXZHX）", rows: [
+        // ---------- 操作按钮（改动即时生效，没有「保存」） ----------
+        stack.addArrangedSubview(sectionBox(title: "MacKZ v\(UpdateChecker.currentVersion) · KDXZHX", rows: [
             makeRow(views: [makeButton("恢复默认", #selector(resetDefaults)),
-                            makeButton("放弃修改并重载", #selector(reloadFromDisk)),
                             makeButton("传感器探针", #selector(probe)),
                             makeButton("检查更新", #selector(checkUpdate)),
-                            makeButton("打开官网", #selector(openHomepage)),
-                            makeButton("保存并应用", #selector(apply), emphasized: true)])
+                            makeButton("打开官网", #selector(openHomepage))])
         ]))
     }
 
@@ -471,6 +441,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         let handler = SliderHandler { [weak self] v in
             self?.config[keyPath: kp] = v
             valueLabel.stringValue = format(v)
+            self?.commitSoon()
         }
         handlers.append(handler)
         slider.target = handler
@@ -501,6 +472,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             let rounded = Int(v.rounded())
             self?.config[keyPath: kp] = rounded
             valueLabel.stringValue = "\(rounded)\(suffix)"
+            self?.commitSoon()
         }
         handlers.append(handler)
         slider.target = handler
@@ -512,14 +484,13 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     /// 两个可点选的动画卡片（放在控制器上，供点击时互斥更新选中态）
     private var foldStyleCards: [FoldStyleCard] = []
 
-    /// 折叠动画选择：两个可点选的框，点一下立即切换。
-    /// 与其它控件一样只写内存副本，点「保存并应用」才落盘。
+    /// 折叠动画选择：两个可点选的框，点一下立即生效
     private func foldStylePicker() -> NSView {
         let cards = [
-            FoldStyleCard(value: "hinge", title: "① Duo 折叠（参考实现）",
-                          detail: "复刻 iPhone Duo 的透视折叠：内容往键盘侧折倒收走"),
-            FoldStyleCard(value: "corner", title: "② 左下角收起",
-                          detail: "斜轴折叠：内容沿对角线折倒、往左下角收走")
+            FoldStyleCard(value: "hinge", title: "Duo 折叠",
+                          detail: "参考实现：内容往键盘侧折倒收走"),
+            FoldStyleCard(value: "corner", title: "左下角收起",
+                          detail: "斜轴折叠：内容往左下角折倒收走")
         ]
         foldStyleCards = cards
         for card in cards {
@@ -528,6 +499,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
                 guard let self, let card else { return }
                 self.config.foldStyle = card.value
                 for other in self.foldStyleCards { other.setSelected(other.value == card.value) }
+                self.commit()
             }
         }
         return makeRow(title: "折叠动画", views: cards)
@@ -614,6 +586,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         let handler = PopupHandler { [weak self] label in
             guard let self, let match = options.first(where: { $0.label == label }) else { return }
             self.config[keyPath: kp] = match.value
+            self.commit()
         }
         handlers.append(handler)
         popup.target = handler
@@ -627,7 +600,10 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         let box = NSButton(checkboxWithTitle: "", target: nil, action: nil)
         box.state = config[keyPath: keyPath] ? .on : .off
         let kp = keyPath
-        let handler = BoolHandler { [weak self] on in self?.config[keyPath: kp] = on }
+        let handler = BoolHandler { [weak self] on in
+            self?.config[keyPath: kp] = on
+            self?.commit()
+        }
         handlers.append(handler)
         box.target = handler
         box.action = #selector(BoolHandler.fire(_:))
@@ -703,13 +679,10 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
 
     // MARK: - 按钮动作
 
+    /// 落盘 + 热生效（所有控件改动都会走到这里）
     @objc private func apply() {
         onApply?(config)
-        flashStatus("已保存并应用 ✓")
-    }
-
-    @objc private func reloadFromDisk() {
-        onReload?()
+        flashStatus("已生效 ✓")
     }
 
     @objc private func resetDefaults() {
