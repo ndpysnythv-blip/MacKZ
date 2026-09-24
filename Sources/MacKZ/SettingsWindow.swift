@@ -246,7 +246,9 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         let qrNote = NSTextField(wrappingLabelWithString: "二维码生成中…")
         qrNote.font = .systemFont(ofSize: 11)
         qrNote.textColor = .tertiaryLabelColor
-        qrNote.preferredMaxLayoutWidth = 240
+        qrNote.alignment = .center
+        // 限宽 150：说明文字在二维码下方换行，不把左边那一列的操作挤掉
+        qrNote.preferredMaxLayoutWidth = 150
         qrHint = qrNote
 
         // 面板只留状态与操作，长篇说明已移除
@@ -307,22 +309,36 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
                             makeButton("复位（完全展开）", #selector(resetManual))])
         ]))
 
-        // ---------- 手机遥控（紧凑：二维码放右上角，开关与操作并排，不浪费横向空间） ----------
-        add(sectionBox(title: "手机遥控", rows: [
-            makeRow(title: "连接码", views: [remoteState, qr]),
-            makeRow(views: [remoteLocalState, qrNote]),
+        // ---------- 手机遥控（左列放操作，二维码贴右侧同排，右上角不留空白） ----------
+        let remoteLeft = NSStackView(views: [
+            makeRow(title: "连接码", views: [remoteState]),
             makeRow(views: [makeButton("复制连接码", #selector(copyRemoteURL)),
                             makeButton("打开配对页", #selector(openPairPage)),
-                            makeButton("刷新连接码", #selector(refreshRemoteURL)),
-                            inlineSwitch("启用遥控", \.remoteControl),
-                            inlineSwitch("陀螺仪接管", \.phoneGyro)]),
-            makeRow(views: [makeButton("陀螺仪引导…", #selector(openGyroSetup)),
-                            makeButton("退出陀螺仪", #selector(stopGyroSession)),
-                            gyroOpen,
-                            makeButton("复位标定", #selector(gyroMarkReset))]),
-            makeRow(views: [gyroState]),
-            makeRow(views: [gyroMap])
-        ]))
+                            makeButton("刷新连接码", #selector(refreshRemoteURL))]),
+            makeRow(views: [inlineSwitch("启用遥控", \.remoteControl),
+                            inlineSwitch("陀螺仪接管", \.phoneGyro),
+                            makeButton("陀螺仪引导…", #selector(openGyroSetup)),
+                            makeButton("退出陀螺仪", #selector(stopGyroSession))]),
+            makeRow(views: [gyroOpen,
+                            makeButton("复位标定", #selector(gyroMarkReset)),
+                            gyroState])
+        ])
+        remoteLeft.orientation = .vertical
+        remoteLeft.alignment = .leading
+        remoteLeft.spacing = 7
+
+        // 二维码直接贴在这些操作的右边：共用同一段高度，不再多占一行
+        let remoteRight = NSStackView(views: [qr, qrNote])
+        remoteRight.orientation = .vertical
+        remoteRight.alignment = .centerX
+        remoteRight.spacing = 4
+
+        let remoteColumns = NSStackView(views: [remoteLeft, remoteRight])
+        remoteColumns.orientation = .horizontal
+        remoteColumns.alignment = .top
+        remoteColumns.spacing = 12
+
+        add(sectionBox(title: "手机遥控", rows: [remoteColumns, remoteLocalState, gyroMap]))
 
         // ---------- 合盖与休眠 ----------
         let sleepState = NSTextField(labelWithString: "读取中…")

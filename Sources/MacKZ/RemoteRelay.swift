@@ -10,8 +10,9 @@ import Foundation
 /// 取舍：
 /// - 只传「指令」和「角度数字」，房间号是每次随机生成的 8 位连接码，用完即弃；
 /// - 不依赖任何第三方库：WebSocket 交给 URLSessionWebSocketTask，MQTT 3.1.1 报文自己拼；
-/// - 断线自动重连（退避 5 秒），连接状态直接写进设置面板。
-final class RemoteRelay {
+/// - **和手机页完全同构**：两端都同时连所有候选中转、都在 WebSocket 握手完成之后才发 MQTT CONNECT。
+///   这两点缺一就会「手机显示已连接、Mac 一直卡在中转连接中」。
+final class RemoteRelay: NSObject, URLSessionWebSocketDelegate {
 
     /// 收到手机下发的遥控指令（主线程回调）
     var onCommand: ((RemoteControl.Command) -> Void)?
@@ -23,8 +24,8 @@ final class RemoteRelay {
     /// 手机陀螺仪会话状态（"setup" = 还没设置完，手机端显示「等待 Mac 设置」；"running" = 已开始使用）
     var stateProvider: (() -> (progress: Double, angle: Double?, phoneGyro: String))?
 
-    /// 公共中转候选：手机端用**同一份列表**（同时连所有候选）。
-    /// 注意第二个走 **443 端口** —— 很多网络只放行 443，Mac 连不上 8884/8084 这类非常用端口时，
+    /// 公共中转候选：手机端用**同一份列表**，两端都同时连全部候选。
+    /// 第二个走 **443 端口** —— 很多网络只放行 443；只连非常用端口时，
     /// 表现就是「手机显示已连接、Mac 一直卡在连接中」。
     private static let brokers: [URL] = [
         URL(string: "wss://broker.hivemq.com:8884/mqtt")!,
@@ -32,30 +33,45 @@ final class RemoteRelay {
         URL(string: "wss://broker.emqx.io:8084/mqtt")!,
         URL(string: "wss://test.mosquitto.org:8081")!
     ]
-    /// 当前正在用的中转下标
-    private(set) var brokerIndex = 0
-    /// 最近一次连接失败的原因（显示在面板上，便于定位是网络还是协议问题）
-    private var lastFailure = ""
     /// 连接码字符集：去掉 0/O/1/I 等易混字符，方便对着屏幕手输
     private static let alphabet = Array("23456789ABCDEFGHJKLMNPQRSTUVWXYZ")
     /// 上报本机状态的频率（秒）
     private static let stateInterval: TimeInterval = 0.25
     /// MQTT keepalive（秒）
     private static let keepAlive: TimeInterval = 30
+    /// 全部通道都失败后，整体重连的等待时间（秒）
+    private static let retryDelay: TimeInterval = 5
 
+    /// 一条中转通道：一个 WebSocket + 它自己的收包缓冲与握手状态（每条通道独立一条 MQTT 会话）
+    private final class Channel {
+        let url: URL
+        let task: URLSessionWebSocketTask
+        var buffer = Data()
+        var opened = false          // WebSocket 握手已完成
+        var ready = false           // 已收到 SUBACK：这条通道能收发指令了
+        init(url: URL, task: URLSessionWebSocketTask) {
+            self.url = url
+            self.task = task
+        }
+    }
+
+    /// 所有通道状态都只在 `queue` 上读写，避免多线程竞争
     private let queue = DispatchQueue(label: "MacKZ.RemoteRelay")
     private var session: URLSession?
-    private var task: URLSessionWebSocketTask?
+    private var channels: [Channel] = []
     private var pingTimer: Timer?
     private var stateTimer: Timer?
     private var retryTimer: Timer?
-    private var buffer = Data()
     private var packetId: UInt16 = 1
-    private var connecting = false
+    /// 最近一次连接失败的原因（显示在面板上，便于定位是网络还是协议问题）
+    private var lastFailure = ""
+    /// 两端都连了多个中转，同一条消息可能收到多份：短时间内重复内容直接丢掉
+    private var lastPayload = ""
+    private var lastPayloadAt = Date.distantPast
 
     /// 本次连接码（8 位大写字母 + 数字）
     private(set) var code = ""
-    /// 是否已完成 MQTT 订阅（真正可用）
+    /// 是否已至少有一条通道可用（真正能收发）
     private(set) var isConnected = false
 
     /// 手机在官网页面上要输入的连接码
@@ -87,106 +103,147 @@ final class RemoteRelay {
     }
 
     func stop() {
-        retryTimer?.invalidate(); retryTimer = nil
         pingTimer?.invalidate(); pingTimer = nil
         stateTimer?.invalidate(); stateTimer = nil
-        task?.cancel(with: .goingAway, reason: nil)
-        task = nil
-        session?.invalidateAndCancel()
+        retryTimer?.invalidate(); retryTimer = nil
+        let old = channels
+        channels = []
+        let oldSession = session
         session = nil
-        queue.sync { buffer.removeAll() }
+        queue.async {
+            for channel in old { channel.task.cancel(with: .goingAway, reason: nil) }
+            oldSession?.invalidateAndCancel()
+        }
         isConnected = false
-        connecting = false
         code = ""
     }
 
-    private func connect() {
-        connecting = true
-        isConnected = false
-        queue.sync { buffer.removeAll() }
-        onStatus?("中转连接中…")
+    // MARK: - 连接
 
+    /// 同时连所有候选中转：任一条握手成功并能订阅，就代表整条链路可用
+    private func connect() {
+        onStatus?("中转连接中…")
         let config = URLSessionConfiguration.default
         config.waitsForConnectivity = false
         config.timeoutIntervalForRequest = 20
-        let session = URLSession(configuration: config)
+        // delegate 必须挂在 URLSession 上，才能在「WebSocket 握手完成」时收到通知
+        let session = URLSession(configuration: config, delegate: self, delegateQueue: nil)
         self.session = session
 
-        let task = session.webSocketTask(with: Self.brokers[brokerIndex])
-        self.task = task
-        task.resume()
-        receiveLoop(task)                       // URLSession 会先完成握手，再把这里的报文发出去
-
-        // MQTT CONNECT：协议名 "MQTT"、等级 4、clean session、keepalive
-        var body = Data()
-        body.append(mqttString("MQTT"))
-        body.append(contentsOf: [4, 0x02, UInt8(Self.keepAlive / 10), 0])
-        body.append(mqttString("mackz-mac-" + UUID().uuidString.prefix(8)))
-        send(packet(first: 0x10, body: body), on: task)
-
+        queue.async { [weak self] in
+            guard let self else { return }
+            for channel in self.channels { channel.task.cancel(with: .goingAway, reason: nil) }
+            self.channels.removeAll()
+            for url in Self.brokers {
+                let task = session.webSocketTask(with: url)
+                let channel = Channel(url: url, task: task)
+                self.channels.append(channel)
+                task.resume()
+                self.receive(on: channel)
+            }
+        }
         startPing()
-        // 兜底：15 秒还没订阅成功就换下一个中转（公共 broker 偶发握手失败或对某地区不通）
-        DispatchQueue.main.asyncAfter(deadline: .now() + 15) { [weak self] in
-            guard let self, !self.isConnected, self.connecting else { return }
-            self.switchToNextBroker()
+
+        // 兜底：12 秒一条都没连上就整体重来（部分网络会静默丢包，不会报错）
+        DispatchQueue.main.asyncAfter(deadline: .now() + 12) { [weak self] in
+            guard let self, !self.code.isEmpty, !self.isConnected else { return }
+            self.reconnectLater(delay: 1)
         }
     }
 
-    /// 当前中转不可用：换下一个候选
-    private func switchToNextBroker() {
-        brokerIndex = (brokerIndex + 1) % Self.brokers.count
-        let host = Self.brokers[brokerIndex].host ?? "中转"
-        let reason = lastFailure.isEmpty ? "" : "（\(lastFailure)）"
-        NSLog("[MacKZ] 中转切换：%@ %@", Self.brokers[brokerIndex].absoluteString, reason)
-        onStatus?("连不上\(reason)，换中转重试：\(host)")
+    /// 全部通道都不可用：稍后整体重连。**连接码不变**，二维码不会因此刷新
+    private func reconnectLater(delay: TimeInterval = RemoteRelay.retryDelay) {
+        retryTimer?.invalidate()
+        guard !code.isEmpty else { return }
         isConnected = false
-        connecting = false
-        task?.cancel(with: .goingAway, reason: nil)
-        session?.invalidateAndCancel()
-        task = nil
-        session = nil
-        connect()
+        if !lastFailure.isEmpty { onStatus?("中转连不上（\(lastFailure)），重试中…") }
+        let timer = Timer(timeInterval: delay, repeats: false) { [weak self] _ in
+            guard let self, !self.code.isEmpty else { return }
+            self.connect()
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        retryTimer = timer
     }
 
-    /// 5 秒后重连（断线 / 超时兜底）
-    private func reconnectLater() {
-        retryTimer?.invalidate()
-        guard !code.isEmpty else { return }     // stop() 过就不再重连
-        isConnected = false
-        connecting = false
-        retryTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: false) { [weak self] _ in
+    // MARK: - WebSocket 生命周期
+
+    /// WebSocket 握手完成 —— **必须在这里才发 MQTT CONNECT**（和手机页 js 的 ws.onopen 一致）。
+    /// 握手还没完成就发报文会被直接丢弃，随后既收不到 CONNACK 也不会报错，
+    /// 界面就会永远停在「中转连接中…」。
+    func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask,
+                    didOpenWithProtocol protocol: String?) {
+        queue.async { [weak self] in
+            guard let self, let channel = self.channel(for: webSocketTask) else { return }
+            channel.opened = true
+            self.sendConnect(on: channel)
+        }
+    }
+
+    func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask,
+                    didCloseWith closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {
+        queue.async { [weak self] in
+            guard let self else { return }
+            self.drop(channel: webSocketTask, reason: "通道关闭")
+        }
+    }
+
+    private func channel(for task: URLSessionWebSocketTask) -> Channel? {
+        channels.first { $0.task === task }
+    }
+
+    /// 丢掉一条通道；一条不剩时安排整体重连
+    private func drop(channel task: URLSessionWebSocketTask, reason: String) {
+        guard let index = channels.firstIndex(where: { $0.task === task }) else { return }
+        if lastFailure.isEmpty { lastFailure = reason }
+        channels.remove(at: index)
+        evaluate()
+    }
+
+    /// 汇总可用情况：有通道订阅成功 = 已连接；一条通道都不在 = 重连
+    private func evaluate() {
+        let ready = channels.filter { $0.ready }.count
+        let alive = channels.count
+        let failure = lastFailure
+        DispatchQueue.main.async { [weak self] in
             guard let self, !self.code.isEmpty else { return }
-            self.task?.cancel(with: .goingAway, reason: nil)
-            self.session?.invalidateAndCancel()
-            self.connect()
+            if ready > 0 {
+                if !self.isConnected {
+                    self.isConnected = true
+                    self.lastFailure = ""
+                    self.onStatus?("中转已连接，等手机配对（\(self.code)）")
+                    self.startState()
+                }
+            } else if alive == 0 {
+                self.reconnectLater()
+            } else if self.isConnected {
+                self.isConnected = false
+                self.onStatus?("中转断开（\(failure)），重连中…")
+            }
         }
     }
 
     // MARK: - 收发
 
-    private func receiveLoop(_ task: URLSessionWebSocketTask) {
-        task.receive { [weak self] result in
-            guard let self, self.task === task else { return }
-            switch result {
-            case .success(let message):
-                switch message {
-                case .data(let data): self.feed(data)
-                case .string(let text): self.feed(Data(text.utf8))
-                @unknown default: break
-                }
-                self.receiveLoop(task)
-            case .failure(let error):
-                // 连接断开：记下原因并换下一个中转
-                self.lastFailure = Self.shortReason(error)
-                if self.isConnected || self.connecting {
-                    DispatchQueue.main.async { self.switchToNextBroker() }
+    /// 每条通道各自收包：MQTT 的分包缓冲必须按通道独立
+    private func receive(on channel: Channel) {
+        channel.task.receive { [weak self] result in
+            guard let self else { return }
+            self.queue.async {
+                guard self.channels.contains(where: { $0 === channel }) else { return }
+                switch result {
+                case .success(let message):
+                    switch message {
+                    case .data(let data): self.feed(data, on: channel)
+                    case .string(let text): self.feed(Data(text.utf8), on: channel)
+                    @unknown default: break
+                    }
+                    self.receive(on: channel)
+                case .failure(let error):
+                    self.lastFailure = Self.shortReason(error)
+                    self.drop(channel: channel.task, reason: self.lastFailure)
                 }
             }
         }
-    }
-
-    private func send(_ data: Data, on task: URLSessionWebSocketTask?) {        guard let task = task ?? self.task else { return }
-        task.send(.data(data)) { _ in }
     }
 
     /// 把网络错误压缩成一句人话（面板上显示用）
@@ -202,44 +259,49 @@ final class RemoteRelay {
         }
     }
 
+    /// MQTT CONNECT：协议名 "MQTT"、等级 4、clean session、keepalive
+    private func sendConnect(on channel: Channel) {
+        var body = Data()
+        body.append(mqttString("MQTT"))
+        body.append(contentsOf: [4, 0x02, UInt8(Self.keepAlive / 10), 0])
+        body.append(mqttString("mackz-mac-" + UUID().uuidString.prefix(8)))
+        send(packet(first: 0x10, body: body), on: channel)
+    }
+
+    private func send(_ data: Data, on channel: Channel) {
+        channel.task.send(.data(data)) { _ in }
+    }
+
     /// 解析 MQTT 报文流（可能一次收到多条，也可能一条被拆成多次）
-    private func feed(_ chunk: Data) {
-        queue.async { [weak self] in
-            guard let self else { return }
-            self.buffer.append(chunk)
-            while true {
-                let bytes = [UInt8](self.buffer)
-                guard bytes.count >= 2 else { return }
-                // 剩余长度：最多 4 字节变长整数
-                var index = 1, multiplier = 1, remaining = 0, byte: UInt8 = 0
-                repeat {
-                    guard index < bytes.count else { return }
-                    byte = bytes[index]; index += 1
-                    remaining += Int(byte & 0x7F) * multiplier
-                    multiplier *= 128
-                    if multiplier > 128 * 128 * 128 * 128 { return }
-                } while byte & 0x80 != 0
-                guard bytes.count >= index + remaining else { return }
-                let first = bytes[0]
-                let body = Data(bytes[index..<(index + remaining)])
-                self.buffer.removeFirst(index + remaining)
-                self.handle(first: first, body: body)
-            }
+    private func feed(_ chunk: Data, on channel: Channel) {
+        channel.buffer.append(chunk)
+        while true {
+            let bytes = [UInt8](channel.buffer)
+            guard bytes.count >= 2 else { return }
+            // 剩余长度：最多 4 字节变长整数
+            var index = 1, multiplier = 1, remaining = 0, byte: UInt8 = 0
+            repeat {
+                guard index < bytes.count else { return }
+                byte = bytes[index]; index += 1
+                remaining += Int(byte & 0x7F) * multiplier
+                multiplier *= 128
+                if multiplier > 128 * 128 * 128 * 128 { return }
+            } while byte & 0x80 != 0
+            guard bytes.count >= index + remaining else { return }
+            let first = bytes[0]
+            let body = Data(bytes[index..<(index + remaining)])
+            channel.buffer.removeFirst(index + remaining)
+            handle(first: first, body: body, on: channel)
         }
     }
 
-    private func handle(first: UInt8, body: Data) {
+    private func handle(first: UInt8, body: Data, on channel: Channel) {
         switch first >> 4 {
         case 2:                                  // CONNACK → 订阅手机上行主题
-            subscribe()
-        case 9:                                  // SUBACK → 中转真正可用
-            DispatchQueue.main.async { [weak self] in
-                guard let self else { return }
-                self.isConnected = true
-                self.connecting = false
-                self.onStatus?("中转已连接，等手机配对（\(self.code)）")
-                self.startState()
-            }
+            subscribe(on: channel)
+        case 9:                                  // SUBACK → 这条通道可用
+            channel.ready = true
+            evaluate()
         case 3:                                  // PUBLISH：解析主题与负载
             let qos = (first >> 1) & 0x03
             let bytes = [UInt8](body)
@@ -259,6 +321,12 @@ final class RemoteRelay {
 
     /// 处理手机下发的一条 JSON：`{"a":"close|open|play|progress","v":0.5}` 或 `{"h":93.4}`
     private func dispatch(_ payload: String) {
+        // 两端都连了多条中转，同一份内容会到达多次：120 毫秒内的重复内容丢掉
+        let now = Date()
+        if payload == lastPayload && now.timeIntervalSince(lastPayloadAt) < 0.12 { return }
+        lastPayload = payload
+        lastPayloadAt = now
+
         guard let data = payload.data(using: .utf8),
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
         if let hinge = object["h"] as? Double ?? (object["h"] as? NSNumber)?.doubleValue {
@@ -278,13 +346,13 @@ final class RemoteRelay {
         DispatchQueue.main.async { [weak self] in self?.onCommand?(command) }
     }
 
-    private func subscribe() {
+    private func subscribe(on channel: Channel) {
         var body = Data()
         packetId = packetId &+ 1
         body.append(contentsOf: [UInt8(packetId >> 8), UInt8(packetId & 0xFF)])
         body.append(mqttString(upTopic))
         body.append(0)                           // QoS 0
-        send(packet(first: 0x82, body: body), on: nil)
+        send(packet(first: 0x82, body: body), on: channel)
     }
 
     /// 在本机与手机之间保持 MQTT 会话（keepalive）
@@ -293,7 +361,13 @@ final class RemoteRelay {
         // 用 Timer(timeInterval:) 自己加入 common 模式：scheduledTimer 会顺带加进 default 模式，
         // 同一个 timer 被加两次会导致回调触发两遍
         let timer = Timer(timeInterval: Self.keepAlive / 2, repeats: true) { [weak self] _ in
-            self?.send(Data([0xC0, 0x00]), on: nil)
+            guard let self else { return }
+            self.queue.async {
+                let ping = Data([0xC0, 0x00])
+                for channel in self.channels where channel.opened {
+                    channel.task.send(.data(ping)) { _ in }
+                }
+            }
         }
         RunLoop.main.add(timer, forMode: .common)
         pingTimer = timer
@@ -314,11 +388,18 @@ final class RemoteRelay {
         stateTimer = timer
     }
 
+    /// 发布到所有已就绪的通道（两端任一条重合即可互通）
     private func publish(_ text: String) {
-        var body = Data()
-        body.append(mqttString(downTopic))
-        body.append(Data(text.utf8))
-        send(packet(first: 0x30, body: body), on: nil)
+        queue.async { [weak self] in
+            guard let self else { return }
+            var body = Data()
+            body.append(self.mqttString(self.downTopic))
+            body.append(Data(text.utf8))
+            let data = self.packet(first: 0x30, body: body)
+            for channel in self.channels where channel.ready {
+                channel.task.send(.data(data)) { _ in }
+            }
+        }
     }
 
     // MARK: - MQTT 报文拼装
