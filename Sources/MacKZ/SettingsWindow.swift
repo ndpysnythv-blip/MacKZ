@@ -300,12 +300,14 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         progressSlider.action = #selector(SliderHandler.fire(_:))
 
         let commonTip = NSTextField(wrappingLabelWithString:
-            "① 折叠方向：决定画面是往屏幕下方还是上方收；② 开始折叠角：铰链角度低于它才出现动画（默认 90°）；"
-            + "③ 视觉风格：磨砂玻璃观感；④ 下面的滑块与按钮可随时预览动画（不依赖铰链传感器）。")
+            "① 折叠动画：两个框二选一（上下折叠 / 左下角收起）；② 折叠方向：决定画面是往屏幕下方还是上方收；"
+            + "③ 开始折叠角：铰链角度低于它才出现动画（默认 90°）；"
+            + "④ 视觉风格：磨砂玻璃观感；⑤ 下面的滑块与按钮可随时预览动画（不依赖铰链传感器）。")
         commonTip.font = .systemFont(ofSize: 11)
         commonTip.textColor = .tertiaryLabelColor
         commonTip.preferredMaxLayoutWidth = 520
         stack.addArrangedSubview(sectionBox(title: "常用设置", rows: [
+            foldStylePicker(),
             popupRow("折叠方向", \.foldDirection, options: [
                 ("down", "向下收（内容折向屏幕下方，推荐）"),
                 ("up", "向上收（参考实现原始方向）")
@@ -505,6 +507,98 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         slider.action = #selector(SliderHandler.fire(_:))
 
         return makeRow(title: title, views: [slider, valueLabel])
+    }
+
+    /// 两个可点选的动画卡片（放在控制器上，供点击时互斥更新选中态）
+    private var foldStyleCards: [FoldStyleCard] = []
+
+    /// 折叠动画选择：两个可点选的框，点一下立即切换。
+    /// 与其它控件一样只写内存副本，点「保存并应用」才落盘。
+    private func foldStylePicker() -> NSView {
+        let cards = [
+            FoldStyleCard(value: "hinge", title: "① 上下折叠",
+                          detail: "画面绕屏幕边折起收走（磨砂玻璃观感，默认）"),
+            FoldStyleCard(value: "corner", title: "② 左下角收起",
+                          detail: "整屏一边缩小一边往左下角滑走")
+        ]
+        foldStyleCards = cards
+        for card in cards {
+            card.setSelected(card.value == config.foldStyle)
+            card.onClick = { [weak self, weak card] in
+                guard let self, let card else { return }
+                self.config.foldStyle = card.value
+                for other in self.foldStyleCards { other.setSelected(other.value == card.value) }
+            }
+        }
+        return makeRow(title: "折叠动画", views: cards)
+    }
+
+    /// 可点选的动画卡片：选中时描边高亮 + 淡色底
+    private final class FoldStyleCard: NSView {
+
+        /// 对应的 Config.foldStyle 取值
+        let value: String
+        var onClick: (() -> Void)?
+        private(set) var isSelected = false
+        private let titleLabel: NSTextField
+        private let detailLabel: NSTextField
+
+        override var isFlipped: Bool { true }
+
+        init(value: String, title: String, detail: String) {
+            self.value = value
+            titleLabel = NSTextField(labelWithString: title)
+            detailLabel = NSTextField(wrappingLabelWithString: detail)
+            super.init(frame: .zero)
+
+            titleLabel.font = .boldSystemFont(ofSize: 12)
+            detailLabel.font = .systemFont(ofSize: 10.5)
+            detailLabel.textColor = .secondaryLabelColor
+            detailLabel.preferredMaxLayoutWidth = 158
+
+            let stack = NSStackView(views: [titleLabel, detailLabel])
+            stack.orientation = .vertical
+            stack.alignment = .leading
+            stack.spacing = 3
+            stack.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(stack)
+            NSLayoutConstraint.activate([
+                widthAnchor.constraint(equalToConstant: 184),
+                stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
+                stack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+                stack.topAnchor.constraint(equalTo: topAnchor, constant: 9),
+                stack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -9)
+            ])
+        }
+
+        required init?(coder: NSCoder) { fatalError("不支持从归档加载") }
+
+        /// 无 Dock 图标的应用里，第一次点击也要能选中
+        override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+        /// 整块卡片都能点（标签不吞掉鼠标事件）
+        override func hitTest(_ point: NSPoint) -> NSView? {
+            bounds.contains(convert(point, from: superview)) ? self : nil
+        }
+
+        override func mouseDown(with event: NSEvent) { onClick?() }
+
+        func setSelected(_ on: Bool) {
+            guard on != isSelected else { return }
+            isSelected = on
+            needsDisplay = true
+        }
+
+        override func draw(_ dirtyRect: NSRect) {
+            let rect = bounds.insetBy(dx: 1, dy: 1)
+            let path = NSBezierPath(roundedRect: rect, xRadius: 8, yRadius: 8)
+            (isSelected ? NSColor.controlAccentColor.withAlphaComponent(0.16)
+                        : NSColor.controlBackgroundColor).setFill()
+            path.fill()
+            (isSelected ? NSColor.controlAccentColor : NSColor.separatorColor).setStroke()
+            path.lineWidth = isSelected ? 2 : 1
+            path.stroke()
+        }
     }
 
     /// 下拉选择行（对应 Config 里的 String 枚举字段，如视觉风格 / 视点）

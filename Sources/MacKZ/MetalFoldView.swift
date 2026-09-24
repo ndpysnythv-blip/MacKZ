@@ -35,6 +35,9 @@ final class MetalFoldView: NSView {
         var eye = SIMD4<Float>.zero        // 视点 x、y、z、未用
     }
 
+    /// 折叠动画样式：hinge = 玻璃绕屏幕边折叠（默认）；corner = 整屏往左下角收
+    private var foldStyle = "hinge"
+
     /// 折叠进度：0 = 展开（正常画面，投影为恒等直通），1 = 完全合上（玻璃立起 90°）
     var progress: Double = 0 {
         didSet { if abs(progress - oldValue) > 0.0005 { setNeedsFrame() } }
