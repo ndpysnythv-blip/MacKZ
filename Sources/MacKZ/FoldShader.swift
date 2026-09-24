@@ -99,7 +99,7 @@ enum FoldShader {
                           float diagonal, float flip) {
         float2 size = bounds.zw;
         float2 p = position - bounds.xy;
-        // 左下角样式改用「距锚点的距离」，散射渐变方向才与膨胀方向一致
+        // 左下角样式改用「距锚点的距离」，散射渐变方向才与收缩方向一致
         float distance = hingeDistance(p, size, diagonal > 0.5f, flip);
         float contact = smoothstep(size.y * 0.035f, size.y * 0.20f, distance);
         float optical = smoothstep(0.0f, 1.5f / 90.0f, progress);
