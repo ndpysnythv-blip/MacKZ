@@ -239,8 +239,8 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         qr.layer?.backgroundColor = NSColor.white.cgColor
         qr.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
-            qr.widthAnchor.constraint(equalToConstant: 68),
-            qr.heightAnchor.constraint(equalToConstant: 68)
+            qr.widthAnchor.constraint(equalToConstant: 92),
+            qr.heightAnchor.constraint(equalToConstant: 92)
         ])
         qrImage = qr
         let qrNote = NSTextField(wrappingLabelWithString: "二维码生成中…")

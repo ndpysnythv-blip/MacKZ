@@ -116,6 +116,33 @@
     return BROKERS[i];
   })();
 
+  /* 同时连所有候选中转：任一条通即可用（Mac 会在候选之间自动切换）。
+     全部断开才触发重连。 */
+  function MultiSocket(urls, proto) {
+    var self = this;
+    this.readyState = 0;
+    this.sockets = urls.map(function (u) {
+      var w = new WebSocket(u, proto);
+      w.binaryType = 'arraybuffer';
+      w.onopen = function () { self.readyState = 1; if (self.onopen) { self.onopen(); } };
+      w.onmessage = function (e) { if (self.onmessage) { self.onmessage(e); } };
+      w.onclose = function () {
+        var alive = self.sockets.some(function (s) { return s.readyState === 0 || s.readyState === 1; });
+        if (!alive && self.onclose) { self.onclose(); }
+      };
+      w.onerror = function () { };
+      return w;
+    });
+  }
+  MultiSocket.prototype.send = function (data) {
+    for (var i = 0; i < this.sockets.length; i++) {
+      if (this.sockets[i].readyState === 1) { this.sockets[i].send(data); }
+    }
+  };
+  MultiSocket.prototype.close = function () {
+    for (var i = 0; i < this.sockets.length; i++) { try { this.sockets[i].close(); } catch (e) { } }
+  };
+
   /* ---------- 极简 MQTT 3.1.1 over WebSocket 客户端（无第三方依赖） ---------- */
   // subTopic：订阅 Mac 回传的状态；pubTopic：把指令发回 Mac（两者必须分开，别混用）
   function mqttConnect(clientId, subTopic, pubTopic, handlers) {
@@ -181,7 +208,7 @@
 
     function open() {
       closedByUs = false;
-      ws = new WebSocket(BROKER, 'mqtt');
+      ws = new MultiSocket(BROKERS, 'mqtt');
       ws.binaryType = 'arraybuffer';
       ws.onopen = function () {
         var vh = concat([str('MQTT'), new Uint8Array([4, 2, 0, 60])]);

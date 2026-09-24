@@ -59,11 +59,9 @@ final class RemoteRelay {
         String((0..<8).map { _ in alphabet.randomElement() ?? "2" })
     }
 
-    /// 官网配对地址：连接码放在 `#` 片段里，片段不会发往服务器；
-    /// `b` = 当前中转下标（手机端按它连同一个 broker）
-    var pairPageURL: String {
-        code.isEmpty ? "" : "https://kdxzhx.top/mackz#c=\(code)&b=\(brokerIndex)"
-    }
+    /// 官网配对地址：连接码放在 `#` 片段里，片段不会发往服务器。
+    /// 注意：这里**不能**带会变化的信息（比如当前中转下标），否则地址一变二维码就会重新生成、一直闪。
+    var pairPageURL: String { code.isEmpty ? "" : "https://kdxzhx.top/mackz#c=\(code)" }
 
     /// 手机 → Mac 的主题（Mac 订阅）
     private var upTopic: String { "mackz/\(code)/up" }
