@@ -489,8 +489,8 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         let cards = [
             FoldStyleCard(value: "hinge", title: "Duo 折叠",
                           detail: "参考实现：内容往键盘侧折倒收走"),
-            FoldStyleCard(value: "corner", title: "左下角收起",
-                          detail: "斜轴折叠：内容往左下角折倒收走")
+            FoldStyleCard(value: "corner", title: "iPhone Duo 同款",
+                          detail: "围绕左下角膨胀：画面往左下方向移走")
         ]
         foldStyleCards = cards
         for card in cards {

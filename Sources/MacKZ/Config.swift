@@ -64,7 +64,7 @@ struct Config: Codable {
     var foldDirection = "up"
     /// 折叠方向是否已纠正为参考实现方向（v1.10.1 一次性迁移标记，用户不必了解）
     var foldDirectionMigrated = false
-    /// 折叠动画样式：hinge = 玻璃透视折叠（参考实现）；corner = 整屏一边缩小一边往左下角收
+    /// 折叠动画样式：hinge = 玻璃透视折叠（DuoHinge 方向）；corner = iPhone Duo 同款膨胀（锚点在左下角）
     var foldStyle = "hinge"
     /// 是否显示进度角标
     var showBadge = true

@@ -23,13 +23,13 @@ enum FoldShader {
 
     constexpr sampler linearSampler(coord::normalized, address::clamp_to_edge, filter::linear);
 
-    // 距虚拟铰链的距离（决定折倒程度、散射与压暗的渐变基准）
-    //   diagonal = false：铰链在屏幕底边（参考实现方向）
-    //   diagonal = true ：铰链是「过右上角、沿左上—右下对角线」的斜轴 → 内容往左下角折倒
-    inline float hingeDistance(float2 p, float2 size, bool diagonal) {
-        if (!diagonal) return size.y - p.y;
-        // 轴方向 (1,1)/√2，法线 (-1,1)/√2（指向内容一侧，也就是左下）
-        return dot(p - float2(size.x, 0.0f), float2(-0.70711f, 0.70711f));
+    // 距锚点的距离（决定膨胀量、散射与压暗的渐变基准）
+    //   corner = false：铰链在屏幕底边（参考 DuoHinge 方向）
+    //   corner = true ：iPhone Duo 同款的「左下角锚点」——左下角为 0，右上角最大
+    inline float hingeDistance(float2 p, float2 size, bool corner) {
+        if (!corner) return size.y - p.y;
+        float2 uv = p / max(size, float2(1.0f));
+        return length(uv - float2(0.0f, 1.0f)) * size.y;   // 折算成像素尺度，复用原有散射公式
     }
 
     // ---------- 第一趟：固定平面透视投影 ----------
@@ -97,7 +97,7 @@ enum FoldShader {
                           float diagonal) {
         float2 size = bounds.zw;
         float2 p = position - bounds.xy;
-        // 斜轴样式改用「距斜轴的距离」，散射渐变方向才与折倒方向一致
+        // 左下角样式改用「距锚点的距离」，散射渐变方向才与膨胀方向一致
         float distance = hingeDistance(p, size, diagonal > 0.5f);
         float contact = smoothstep(size.y * 0.035f, size.y * 0.20f, distance);
         float optical = smoothstep(0.0f, 1.5f / 90.0f, progress);
@@ -159,51 +159,34 @@ enum FoldShader {
                       layer.sample(linearSampler, bluePosition / bounds.zw).b, center.a);
     }
 
-    // ---------- 备选动画：斜轴折叠（内容往左下角折倒收走） ----------
-    // 与参考实现（DuoHinge）完全同一套射线投射，只把虚拟铰链轴从「屏幕底边」
-    // 换成「过右上角、沿左上—右下对角线」的斜轴：整块内容都在轴的左下方，
-    // 于是玻璃立起时桌面被折向左下角，观感就是「往左下角缩」。
+    // ---------- 备选动画：iPhone 折叠屏同款（锚点放在左下角） ----------
+    // 逆映射结构参考 MacDuo 的 Duo 效果（DhananjayBhosale/MacDuo，MIT）：
+    // 围绕「锚点」做膨胀 —— 锚点附近几乎不动，离锚点越远的内容被推得越远、最终移出画面，
+    // 再叠加随距离增长的模糊（后面两趟高斯）、压暗与完全合上时的整体渐隐。
+    // MacDuo 把锚点放在「屏幕底部中心」，这里改到「左下角」：整幅画面朝左下角方向膨胀/移走。
     float4 cornerGlass(float2 position, texture2d<float> layer, float4 bounds,
                        float progress, float darknessStrength, float3 viewpoint) {
-        float2 size = bounds.zw;
+        float2 size = max(bounds.zw, float2(1.0f));
         float2 p = position - bounds.xy;
-        float angle = clamp(progress, 0.0f, 1.0f) * M_PI_F * 0.5f;
+        float t = clamp(progress, 0.0f, 1.0f);
         // progress=0 时精确直通，避免颜色/几何跳变
-        if (angle < 1e-5f) return float4(layer.sample(linearSampler, position / bounds.zw).rgb, 1.0f);
+        if (t < 1e-5f) return float4(layer.sample(linearSampler, position / bounds.zw).rgb, 1.0f);
 
-        float2 axis = float2(0.70711f, 0.70711f);          // 轴方向：左上 → 右下
-        float2 axisNormal = float2(-0.70711f, 0.70711f);   // 轴法线：指向内容一侧（左下）
-        float2 anchor = float2(size.x, 0.0f);              // 轴过右上角
-        float2 relative = p - anchor;
-        float along = dot(relative, axis);                 // 沿轴位置
-        float distance = dot(relative, axisNormal);        // 距轴距离（内容侧为正）
-        // 归一化到 0~1，用于幕布压暗的渐变（最远点约 (宽+高)/√2）
-        float far = clamp(distance / max((size.x + size.y) * 0.70711f, 1.0f), 0.0f, 1.0f);
+        float2 uv = p / size;                                              // 采样坐标（y 向下）
+        float2 anchor = float2(0.0f, 1.0f);                                // 锚点：左下角
+        float reach = clamp(length(uv - anchor) / 1.41421f, 0.0f, 1.0f);   // 0 = 左下角，1 = 右上角
+        // 膨胀系数：随进度增长，离锚点越远增益越大（起步量 0.12、距离增益 0.56）
+        float expansion = 1.0f + t * (0.12f + 0.56f * reach);
+        // 逆映射：把采样坐标朝锚点收 → 画面围绕锚点放大，远端内容移出屏幕
+        float2 src = anchor + (uv - anchor) / expansion;
 
-        // 幕布压暗：延迟且更宽，绝不熄灭桌面；完全合上时远端保留 40% 透过率
-        float curtainProgress = smoothstep(0.20f, 1.0f, clamp(progress, 0.0f, 1.0f));
-        float feather = 0.22f;
-        float edge = mix(-feather, 0.90f, curtainProgress);
-        float curtain = 1.0f - smoothstep(edge - feather, edge + feather, far);
-        float visibility = 1.0f - min(0.60f * darknessStrength, 0.80f) * curtain;
+        // 压暗：远端更暗，但桌面始终可见
+        float visibility = 1.0f - min(0.60f * darknessStrength, 0.80f) * smoothstep(0.35f, 1.0f, reach);
+        // 完全合上时整体渐隐（iPhone Duo 的收尾）
+        float disappear = 1.0f - smoothstep(0.86f, 1.0f, t);
 
-        float sine = sin(angle);
-        float cosine = cos(angle);
-        float eyeDistance = size.y * max(viewpoint.z, 1.1f);
-        float3 eye = float3(size.x * viewpoint.x, size.y * viewpoint.y, eyeDistance);
-        // 玻璃点：沿斜轴平移 + 绕斜轴立起
-        float3 glass = float3(anchor.x + axis.x * along + axisNormal.x * distance * cosine,
-                              anchor.y + axis.y * along + axisNormal.y * distance * cosine,
-                              distance * sine);
-        float depth = eye.z - glass.z;
-        if (depth <= 1e-5f) return float4(0, 0, 0, 1);
-        // 射线 eye→glass 延伸到 z=0 平面的交点
-        float rayScale = eye.z / depth;
-        float2 hit = eye.xy + (glass.xy - eye.xy) * rayScale;
-        bool inside = all(hit >= 0.0f) && all(hit < size);
-        float3 color = inside ? layer.sample(linearSampler, (bounds.xy + hit) / bounds.zw).rgb : float3(0);
-        float transmission = 1.0f - min(distance * 0.0004f, 0.015f);
-        return float4(color * transmission * visibility, 1.0f);
+        float3 color = layer.sample(linearSampler, clamp(src, float2(0.0f), float2(1.0f))).rgb;
+        return float4(color * visibility * disappear, 1.0f);
     }
 
     // ---------- Uniform / 顶点 ----------
