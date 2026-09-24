@@ -83,7 +83,8 @@ final class MacKZDialog: NSObject, NSWindowDelegate {
             textView.isHorizontallyResizable = false
             textView.autoresizingMask = [.width]
             textView.minSize = NSSize(width: 0, height: 0)
-            textView.maxSize = NSSize(width: .greatestFiniteMagnitude, height: .greatestFiniteMagnitude)
+            textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude,
+                                      height: CGFloat.greatestFiniteMagnitude)
             textView.textContainer?.widthTracksTextView = true
             textView.textContainer?.containerSize = NSSize(width: scroll.contentSize.width,
                                                            height: .greatestFiniteMagnitude)
