@@ -13,9 +13,9 @@
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.14.1</string>
+    <string>1.15.0</string>
     <key>CFBundleVersion</key>
-    <string>54</string>
+    <string>55</string>
     <!-- 应用图标：由 build.sh 用 Resources/logo.jpg 自动生成 AppIcon.icns（作者 KDXZHX 的 logo） -->
     <key>CFBundleIconFile</key>
     <string>AppIcon</string>

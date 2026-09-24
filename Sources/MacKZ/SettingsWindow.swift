@@ -307,22 +307,21 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
                             makeButton("复位（完全展开）", #selector(resetManual))])
         ]))
 
-        // ---------- 手机遥控（二维码贴在按钮右侧，不占一整行） ----------
+        // ---------- 手机遥控（紧凑：二维码放右上角，开关与操作并排，不浪费横向空间） ----------
         add(sectionBox(title: "手机遥控", rows: [
-            makeRow(title: "连接码", views: [remoteState]),
+            makeRow(title: "连接码", views: [remoteState, qr]),
             makeRow(views: [remoteLocalState, qrNote]),
             makeRow(views: [makeButton("复制连接码", #selector(copyRemoteURL)),
                             makeButton("打开配对页", #selector(openPairPage)),
                             makeButton("刷新连接码", #selector(refreshRemoteURL)),
-                            qr]),
-            switchRow("启用手机遥控", \.remoteControl),
-            switchRow("允许手机陀螺仪接管角度", \.phoneGyro),
-            makeRow(views: [gyroState]),
-            makeRow(views: [gyroMap]),
+                            inlineSwitch("启用遥控", \.remoteControl),
+                            inlineSwitch("陀螺仪接管", \.phoneGyro)]),
             makeRow(views: [makeButton("陀螺仪引导…", #selector(openGyroSetup)),
                             makeButton("退出陀螺仪", #selector(stopGyroSession)),
                             gyroOpen,
-                            makeButton("复位标定", #selector(gyroMarkReset))])
+                            makeButton("复位标定", #selector(gyroMarkReset))]),
+            makeRow(views: [gyroState]),
+            makeRow(views: [gyroMap])
         ]))
 
         // ---------- 合盖与休眠 ----------
@@ -614,8 +613,14 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
 
     /// 开关行
     private func switchRow(_ title: String, _ keyPath: WritableKeyPath<Config, Bool>) -> NSView {
-        let box = NSButton(checkboxWithTitle: "", target: nil, action: nil)
+        makeRow(title: title, views: [inlineSwitch("", keyPath)])
+    }
+
+    /// 不带标题列的小开关（塞进按钮行里用，省一行也省宽度）
+    private func inlineSwitch(_ title: String, _ keyPath: WritableKeyPath<Config, Bool>) -> NSView {
+        let box = NSButton(checkboxWithTitle: title, target: nil, action: nil)
         box.state = config[keyPath: keyPath] ? .on : .off
+        box.font = .systemFont(ofSize: 11.5)
         let kp = keyPath
         let handler = BoolHandler { [weak self] on in
             self?.config[keyPath: kp] = on
@@ -624,7 +629,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         handlers.append(handler)
         box.target = handler
         box.action = #selector(BoolHandler.fire(_:))
-        return makeRow(title: title, views: [box])
+        return box
     }
 
     /// 带标题的行（标题右对齐、固定宽度）

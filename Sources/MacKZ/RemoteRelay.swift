@@ -23,15 +23,19 @@ final class RemoteRelay {
     /// 手机陀螺仪会话状态（"setup" = 还没设置完，手机端显示「等待 Mac 设置」；"running" = 已开始使用）
     var stateProvider: (() -> (progress: Double, angle: Double?, phoneGyro: String))?
 
-    /// 公共中转候选：**按同一个顺序也写进手机端**（配对链接带上下标 b），任一个通就能用。
-    /// 只挂一个地址时经常出现「手机连上了、Mac 连不上」—— 公共 broker 会按网络/地区抖动或限流。
+    /// 公共中转候选：手机端用**同一份列表**（同时连所有候选）。
+    /// 注意第二个走 **443 端口** —— 很多网络只放行 443，Mac 连不上 8884/8084 这类非常用端口时，
+    /// 表现就是「手机显示已连接、Mac 一直卡在连接中」。
     private static let brokers: [URL] = [
         URL(string: "wss://broker.hivemq.com:8884/mqtt")!,
+        URL(string: "wss://mqtt.eclipseprojects.io:443/mqtt")!,
         URL(string: "wss://broker.emqx.io:8084/mqtt")!,
         URL(string: "wss://test.mosquitto.org:8081")!
     ]
-    /// 当前正在用的中转下标（写进配对链接，手机照它连，保证两端在同一个 broker 上）
+    /// 当前正在用的中转下标
     private(set) var brokerIndex = 0
+    /// 最近一次连接失败的原因（显示在面板上，便于定位是网络还是协议问题）
+    private var lastFailure = ""
     /// 连接码字符集：去掉 0/O/1/I 等易混字符，方便对着屏幕手输
     private static let alphabet = Array("23456789ABCDEFGHJKLMNPQRSTUVWXYZ")
     /// 上报本机状态的频率（秒）
@@ -128,11 +132,13 @@ final class RemoteRelay {
         }
     }
 
-    /// 当前中转不可用：换下一个候选（手机端按配对链接里的 b 连同一个，两端始终保持一致）
+    /// 当前中转不可用：换下一个候选
     private func switchToNextBroker() {
         brokerIndex = (brokerIndex + 1) % Self.brokers.count
-        NSLog("[MacKZ] 中转切换：%@", Self.brokers[brokerIndex].absoluteString)
-        onStatus?("换个中转重试中…（\(Self.brokers[brokerIndex].host ?? "中转")）")
+        let host = Self.brokers[brokerIndex].host ?? "中转"
+        let reason = lastFailure.isEmpty ? "" : "（\(lastFailure)）"
+        NSLog("[MacKZ] 中转切换：%@ %@", Self.brokers[brokerIndex].absoluteString, reason)
+        onStatus?("连不上\(reason)，换中转重试：\(host)")
         isConnected = false
         connecting = false
         task?.cancel(with: .goingAway, reason: nil)
@@ -169,8 +175,9 @@ final class RemoteRelay {
                 @unknown default: break
                 }
                 self.receiveLoop(task)
-            case .failure:
-                // 连接断开：直接换下一个中转（公共 broker 掉线很常见，退避重连往往还是同一个坏地址）
+            case .failure(let error):
+                // 连接断开：记下原因并换下一个中转
+                self.lastFailure = Self.shortReason(error)
                 if self.isConnected || self.connecting {
                     DispatchQueue.main.async { self.switchToNextBroker() }
                 }
@@ -178,9 +185,21 @@ final class RemoteRelay {
         }
     }
 
-    private func send(_ data: Data, on task: URLSessionWebSocketTask?) {
-        guard let task = task ?? self.task else { return }
+    private func send(_ data: Data, on task: URLSessionWebSocketTask?) {        guard let task = task ?? self.task else { return }
         task.send(.data(data)) { _ in }
+    }
+
+    /// 把网络错误压缩成一句人话（面板上显示用）
+    private static func shortReason(_ error: Error) -> String {
+        let ns = error as NSError
+        switch ns.code {
+        case -1001: return "连接超时"
+        case -1003: return "域名解析失败"
+        case -1004: return "服务拒绝连接"
+        case -1005: return "网络中断"
+        case -1200, -1201, -1202: return "TLS 失败"
+        default: return ns.localizedDescription
+        }
     }
 
     /// 解析 MQTT 报文流（可能一次收到多条，也可能一条被拆成多次）

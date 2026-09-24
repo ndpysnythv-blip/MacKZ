@@ -107,6 +107,7 @@
   var $ = function (id) { return document.getElementById(id); };
   /* 公共中转候选：与 Mac 端同一顺序；Mac 的配对链接里带下标 b（也记在 localStorage 里）。 */
   var BROKERS = ['wss://broker.hivemq.com:8884/mqtt',
+                 'wss://mqtt.eclipseprojects.io:443/mqtt',
                  'wss://broker.emqx.io:8084/mqtt',
                  'wss://test.mosquitto.org:8081'];
   var BROKER = (function () {
