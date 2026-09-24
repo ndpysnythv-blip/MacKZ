@@ -23,10 +23,9 @@ enum FoldShader {
 
     constexpr sampler linearSampler(coord::normalized, address::clamp_to_edge, filter::linear);
 
-    // 距锚点的距离（决定收缩量、散射与压暗的渐变基准）
-    //   corner = false：铰链在屏幕底边（参考 DuoHinge 方向）
-    //   corner = true ：iPhone Duo 同款的「角落锚点」——锚点处为 0，正对角最大
-    //   flip   = true 时锚点取右下角（跟随「折叠方向」做左右镜像）
+    // 距铰链的距离（仅 DuoHinge 折叠样式使用；corner 样式用 MacDuo 自己的几何）
+    //   corner = false：铰链在屏幕底边
+    //   corner = true ：角落锚点（保留给以后扩展）
     inline float hingeDistance(float2 p, float2 size, bool corner, float flip) {
         if (!corner) return size.y - p.y;
         float2 uv = p / max(size, float2(1.0f));
@@ -99,16 +98,24 @@ enum FoldShader {
                           float diagonal, float flip) {
         float2 size = bounds.zw;
         float2 p = position - bounds.xy;
-        // 左下角样式改用「距锚点的距离」，散射渐变方向才与收缩方向一致
-        float distance = hingeDistance(p, size, diagonal > 0.5f, flip);
-        float contact = smoothstep(size.y * 0.035f, size.y * 0.20f, distance);
-        float optical = smoothstep(0.0f, 1.5f / 90.0f, progress);
-        float angle = clamp(progress, 0.0f, 1.0f) * clamp(angleScale, 0.05f, 1.0f) * M_PI_F * 0.5f;
-        float scatter = distance * sin(angle)
-                      * 0.070f * contact * optical * blurStrength;
-        float radius = scatter / sqrt(1.0f + (scatter / 36.0f) * (scatter / 36.0f));
-        if (radius < 0.35f) return float4(layer.sample(linearSampler, position / bounds.zw).rgb, 1);
-        float sigma = max(radius / 2.44948974f, 0.15f);
+        float sigma;
+        if (diagonal > 0.5f) {
+            // MacDuo Duo 的模糊量（照抄）：sigma 按画面高度的比例给出，blur 取它的默认值 0.65
+            float h = clamp(1.0f - p.y / size.y, 0.0f, 1.0f);
+            float focus = pow(clamp(progress, 0.0f, 1.0f), 0.7f);
+            float spread = 0.12f + 0.88f * pow(h, 1.15f);
+            sigma = max(0.65f * 0.052f * focus * spread * size.y, 0.15f);
+        } else {
+            float distance = size.y - p.y;
+            float contact = smoothstep(size.y * 0.035f, size.y * 0.20f, distance);
+            float optical = smoothstep(0.0f, 1.5f / 90.0f, progress);
+            float angle = clamp(progress, 0.0f, 1.0f) * clamp(angleScale, 0.05f, 1.0f) * M_PI_F * 0.5f;
+            float scatter = distance * sin(angle)
+                          * 0.070f * contact * optical * blurStrength;
+            float radius = scatter / sqrt(1.0f + (scatter / 36.0f) * (scatter / 36.0f));
+            if (radius < 0.35f) return float4(layer.sample(linearSampler, position / bounds.zw).rgb, 1);
+            sigma = max(radius / 2.44948974f, 0.15f);
+        }
         float inverseVariance = 0.5f / (sigma * sigma);
         float3 sum = float3(layer.sample(linearSampler, position / bounds.zw).rgb);
         float total = 1.0f;
@@ -161,36 +168,40 @@ enum FoldShader {
                       layer.sample(linearSampler, bluePosition / bounds.zw).b, center.a);
     }
 
-    // ---------- 备选动画：iPhone 折叠屏同款（画面朝左下角缩进去） ----------
-    // 逆映射结构参考 MacDuo 的 Duo 效果（DhananjayBhosale/MacDuo，MIT）—— 都是「以锚点为中心的
-    // 逆映射 + 随距离增长的模糊 + 压暗 + 末段渐隐」，只把方向反过来用：
-    // MacDuo 是 expansion（画面往外膨胀、远端内容移出屏幕），这里是 shrink（采样半径变大 →
-    // 画面整体变小、朝锚点滑进去），锚点取「左下角」，观感就是整幅画面往左下角缩。
-    // 反方向时锚点镜像到右下角。
+    // ---------- 备选动画：MacDuo 的 Duo（1:1 照搬） ----------
+    // 来源：DhananjayBhosale/MacDuo · Sources/MacDuo/Shader.swift 的 foldEffectPixel()（MIT）。
+    // 参数全部用它的默认值：perspective 0.7、blur 0.65、shadow 0.65、defocus -1（用 pow(p,0.7)）。
+    // 唯一工程差异：MacDuo 用 mipmap 金字塔做模糊，这里用本工程两趟可分离高斯，sigma 公式照抄。
     float4 cornerGlass(float2 position, texture2d<float> layer, float4 bounds,
                        float progress, float darknessStrength, float flip) {
         float2 size = max(bounds.zw, float2(1.0f));
-        float2 p = position - bounds.xy;
-        float t = clamp(progress, 0.0f, 1.0f);
-        // progress=0 时精确直通，避免颜色/几何跳变
-        if (t < 1e-5f) return float4(layer.sample(linearSampler, position / bounds.zw).rgb, 1.0f);
+        float2 screenUV = position / size;
+        float p = clamp(progress, 0.0f, 1.0f);
+        if (p < 0.00001f) return float4(layer.sample(linearSampler, screenUV).rgb, 1);
+        if (p >= 1.0f) return float4(0, 0, 0, 1);
 
-        float2 uv = p / size;                                              // 采样坐标（y 向下）
-        // 锚点跟随「折叠方向」左右镜像：默认左下角，反方向时换成右下角
-        float2 anchor = flip > 0.5f ? float2(1.0f, 1.0f) : float2(0.0f, 1.0f);
-        float reach = clamp(length(uv - anchor) / 1.41421f, 0.0f, 1.0f);   // 0 = 锚点，1 = 正对角
-        // 收缩系数：随进度增长，离锚点越远收缩越多（起步量 0.15、距离增益 0.75）
-        float shrink = 1.0f + t * (0.15f + 0.75f * reach);
-        // 逆映射：采样半径放大 → 画面整体变小并朝锚点（左下角）滑进去
-        float2 src = anchor + (uv - anchor) * shrink;
+        // —— 以下为 MacDuo foldDuo 原文 ——
+        // 物理屏幕本身已提供相机的梯形，这里围绕「底边中心铰链」把画面放大：
+        // 图标被放大、上方内容从顶部移出画面；有界映射避免完全合上时出现奇点。
+        float height = 1.0f - screenUV.y;
+        float expansion = 1.0f + p * (0.12f + mix(0.30f, 0.66f, 0.7f) * height);
+        float2 uv = float2(0.5f + (screenUV.x - 0.5f) / expansion, 1.0f - height / expansion);
 
-        // 压暗：远端更暗，但桌面始终可见
-        float visibility = 1.0f - min(0.60f * darknessStrength, 0.80f) * smoothstep(0.35f, 1.0f, reach);
-        // 完全合上时整体渐隐（iPhone Duo 的收尾）
-        float disappear = 1.0f - smoothstep(0.86f, 1.0f, t);
+        // 模糊量：以画面高度的比例计（对应它 pyramid 的 sigma / sigmaUV）
+        float focus = pow(p, 0.7f);
+        float spread = 0.12f + 0.88f * pow(height, 1.15f);
+        float sigmaUV = 0.65f * 0.052f * focus * spread;
+        float3 color = layer.sample(linearSampler, uv).rgb;
 
-        float3 color = layer.sample(linearSampler, clamp(src, float2(0.0f), float2(1.0f))).rgb;
-        return float4(color * visibility * disappear, 1.0f);
+        float softness = 0.65f;
+        float topWidth = p * (0.075f + 0.15f * softness) + 1.5f * sigmaUV;
+        float sideWidth = (p * (0.055f + 0.12f * softness) + 1.5f * sigmaUV) * size.y / size.x;
+        float bottomWidth = p * (0.012f + 0.025f * softness) + 0.5f * sigmaUV;
+        float mask = smoothstep(0.0f, topWidth, screenUV.y) * smoothstep(0.0f, bottomWidth, height)
+                   * smoothstep(0.0f, sideWidth, screenUV.x) * smoothstep(0.0f, sideWidth, 1.0f - screenUV.x);
+        float shade = 1.0f - 0.65f * 0.12f * p * p * height;
+        float disappear = 1.0f - smoothstep(0.86f, 1.0f, p);
+        return float4(color * mask * shade * disappear, 1);
     }
 
     // ---------- Uniform / 顶点 ----------

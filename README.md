@@ -1,6 +1,6 @@
 # MacKZ —— MacBook 铰链开合全局动画插件
 
-> 作者 **KDXZHX** · 官网页面 <https://kdxzhx.top/mackz.html> · 当前版本 **v1.12.2**
+> 作者 **KDXZHX** · 官网页面 <https://kdxzhx.top/mackz.html> · 当前版本 **v1.13.0**
 
 把 MacBook 屏幕铰链的开合角度当作“动画进度条”，在**任意界面、任意 App（含全屏）之上**渲染一段折叠屏开合动画。
 动画默认与铰链角度 **1:1 实时同步**；中途停手会自动加速播完剩余片段并切回正常画面。
@@ -379,6 +379,14 @@ MacBook Air 等机型没有 Lid Angle Sensor，本插件原本只能退回「开
 ---
 
 ## 16. 更新日志
+
+### v1.13.0
+- **第二个动画改成 1:1 照搬 MacDuo 的 Duo**（DhananjayBhosale/MacDuo · `Sources/MacDuo/Shader.swift` 的 `foldEffectPixel()`，MIT）：
+  不再自己发挥 —— 几何（`expansion`、`uv`）、模糊量 sigma、边缘羽化 `mask`、压暗 `shade`、
+  末段渐隐 `disappear` 全部按原公式与默认参数（perspective 0.7 / blur 0.65 / shadow 0.65 / defocus = pow(p,0.7)）落地，
+  锚点就是它的原版位置（屏幕**底边中心**，画面向外放大、上方内容从顶部移出）。
+  唯一的工程差异：MacDuo 用 mipmap 金字塔做模糊，本工程用原有的两趟可分离高斯，sigma 公式照抄。
+- 卡片文案改为「MacDuo Duo · 1:1 照搬 MacDuo 原版」。
 
 ### v1.12.2
 - **修第二个动画的方向反了**：上一版用的是 MacDuo 那种「膨胀」（往外推，画面看起来往右上角跑）；
