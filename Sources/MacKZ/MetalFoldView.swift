@@ -61,6 +61,7 @@ final class MetalFoldView: NSView {
         glassDispersion = config.styleDispersion
         foldAngleDeg = config.foldAngleDeg
         foldToBottom = config.foldDirection != "up"
+        foldStyle = config.foldStyle
         viewpoint = config.viewpoint == "front" ? .front : .desk
         renderScale = CGFloat(config.renderScale)
     }
@@ -255,7 +256,8 @@ final class MetalFoldView: NSView {
                                 Float(min(max(foldAngleDeg, 5), 90) / 90.0),
                                 foldToBottom ? 1 : 0)
         let eye = viewpoint.eye
-        u.eye = SIMD4<Float>(eye.x, eye.y, eye.z, 0)
+        // eye.w 在着色器里是「动画样式」开关：1 = 左下角收起，0 = 玻璃折叠
+        u.eye = SIMD4<Float>(eye.x, eye.y, eye.z, foldStyle == "corner" ? 1 : 0)
 
         // 四趟接力：投影 → 模糊X → 模糊Y → 色散（色散关掉时最后一趟直接画到 drawable）
         let names = 0..<pipelines.count

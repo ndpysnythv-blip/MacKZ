@@ -58,6 +58,8 @@ struct Config: Codable {
     var foldAngleDeg = 90.0
     /// 折叠方向：down = 铰链在屏幕顶边、画面内容向屏幕下方收（默认）；up = 参考实现的原始方向（内容向上抽走）
     var foldDirection = "down"
+    /// 折叠动画样式：hinge = 玻璃绕屏幕边折叠（默认）；corner = 整屏一边缩小一边往左下角收
+    var foldStyle = "hinge"
     /// 是否显示进度角标
     var showBadge = true
     /// 手机遥控（演示用）：在局域网内开一个极简 HTTP 服务，手机浏览器可控制动画

@@ -148,11 +148,34 @@ enum FoldShader {
                       layer.sample(linearSampler, bluePosition / bounds.zw).b, center.a);
     }
 
+    // ---------- 备选动画：整屏往左下角收 ----------
+    // 左下角是不动点：画面随 progress 一边缩小、一边朝左下角滑走，同时整体压暗。
+    // 与玻璃折叠（hingeGlass）互斥，由 uniform（eye.w）二选一。
+    float4 cornerShrink(float2 position, texture2d<float> layer, float4 bounds,
+                        float progress, float darknessStrength) {
+        float2 size = max(bounds.zw, float2(1.0f));
+        float2 p = position - bounds.xy;
+        float t = clamp(progress, 0.0f, 1.0f);
+        // progress=0 时精确直通，避免颜色/几何跳变
+        if (t < 1e-5f) return float4(layer.sample(linearSampler, position / bounds.zw).rgb, 1.0f);
+
+        // 不动点：左下角（屏幕坐标 y 向下，所以左下角是 (0, height)）
+        float2 anchor = float2(0.0f, size.y);
+        // 缩到 8%：整屏内容被「收」进左下角，同时保留一点余量不至于完全消失
+        float scale = mix(1.0f, 0.08f, t);
+        float2 sample = anchor + (p - anchor) * scale;
+        // 越合越暗，完全合上时保留 35% 透过率，桌面不会整屏归黑
+        float visibility = 1.0f - min(0.65f * darknessStrength, 0.80f) * t;
+        bool inside = all(sample >= 0.0f) && all(sample < size);
+        float3 color = inside ? layer.sample(linearSampler, (bounds.xy + sample) / bounds.zw).rgb : float3(0);
+        return float4(color * visibility, 1.0f);
+    }
+
     // ---------- Uniform / 顶点 ----------
     struct HingeUniforms {
         float4 geometry;   // 宽、高、progress、blur 强度
         float4 optics;     // 压暗强度、色散强度、玻璃最大立起角比例（foldAngleDeg/90）、折叠方向（1=铰链在顶边）
-        float4 eye;        // 视点 x、y、z（相对屏幕尺寸）、未用
+        float4 eye;        // 视点 x、y、z、动画样式（0=玻璃折叠，1=左下角收起）
     };
     struct HingeVertex { float4 position [[position]]; float2 uv; };
 
@@ -162,23 +185,34 @@ enum FoldShader {
         return {float4(uv.x * 2 - 1, 1 - uv.y * 2, 0, 1), uv};
     }
 
+    // 动画样式：1 = 左下角收起（备选），0 = 玻璃折叠（默认）
+    inline bool isCornerStyle(constant HingeUniforms &u) { return u.eye.w > 0.5f; }
+
     fragment float4 hingeProject(HingeVertex in [[stage_in]], texture2d<float> source [[texture(0)]],
                                  constant HingeUniforms &u [[buffer(0)]]) {
+        if (isCornerStyle(u)) {
+            return cornerShrink(in.uv * u.geometry.xy, source, float4(0, 0, u.geometry.xy),
+                                u.geometry.z, u.optics.x);
+        }
         return hingeGlass(in.uv * u.geometry.xy, source, float4(0, 0, u.geometry.xy),
                           u.geometry.z, u.geometry.w, u.optics.x, u.eye.xyz, u.optics.z, u.optics.w);
     }
     fragment float4 hingeBlurX(HingeVertex in [[stage_in]], texture2d<float> source [[texture(0)]],
                                constant HingeUniforms &u [[buffer(0)]]) {
+        // 左下角收起走的是纯缩放，不做玻璃散射（那套几何是按铰链高度算的，套上去会糊错地方）
+        if (isCornerStyle(u)) return float4(source.sample(linearSampler, in.uv).rgb, 1.0f);
         return hingeGaussian(in.uv * u.geometry.xy, source, float4(0, 0, u.geometry.xy),
                              u.geometry.z, float2(1, 0), u.geometry.w, u.optics.z);
     }
     fragment float4 hingeBlurY(HingeVertex in [[stage_in]], texture2d<float> source [[texture(0)]],
                                constant HingeUniforms &u [[buffer(0)]]) {
+        if (isCornerStyle(u)) return float4(source.sample(linearSampler, in.uv).rgb, 1.0f);
         return hingeGaussian(in.uv * u.geometry.xy, source, float4(0, 0, u.geometry.xy),
                              u.geometry.z, float2(0, 1), u.geometry.w, u.optics.z);
     }
     fragment float4 hingeDispersion(HingeVertex in [[stage_in]], texture2d<float> source [[texture(0)]],
                                      constant HingeUniforms &u [[buffer(0)]]) {
+        if (isCornerStyle(u)) return float4(source.sample(linearSampler, in.uv).rgb, 1.0f);
         return hingeChromatic(in.uv * u.geometry.xy, source, float4(0, 0, u.geometry.xy),
                               u.geometry.z, u.optics.y, u.optics.w);
     }
